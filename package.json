@@ -1,0 +1,25 @@
+{
+  "name": "am",
+  "version": "0.0.1",
+  "description": "Models for ArangoDB",
+  "main": "model.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/enten/arangodb-orm.git"
+  },
+  "keywords": [
+    "arango",
+    "arangodb",
+    "model",
+    "orm"
+  ],
+  "author": "Steven Enten <steven@enten.fr>",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/enten/arangodb-orm/issues"
+  },
+  "homepage": "https://github.com/enten/arangodb-orm#readme"
+}
