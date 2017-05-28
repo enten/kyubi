@@ -43,7 +43,7 @@ const FILTER_COMPARATORS = {
   // 'not match': '!~'
 }
 
-const FILTER_OPERATORS_INVERSED = {
+const FILTER_COMPARATORS_INVERSED = {
   '==': 'neq',
   'EQ': 'neq',
   'eq': 'neq',
@@ -1048,7 +1048,7 @@ function parseOptionFilterRaw (raw, docName, isNot) {
     }
 
     if (isNot) {
-      comparator = FILTER_OPERATORS_INVERSED[comparator]
+      comparator = FILTER_COMPARATORS_INVERSED[comparator]
     }
 
     if (!comparison) {
