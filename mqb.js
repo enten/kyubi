@@ -76,55 +76,47 @@ const FILTER_COMPARATORS_INVERSED = {
   // 'not match': '=~'
 }
 
-const HAS_FILTER_COMPARATORS = {
-  '==': '==',
-  'EQ': '==',
-  'eq': '==',
-  '>': '>',
-  'GT': '>',
-  'gt': '>',
-  '>=': '>=',
-  'GTE': '>=',
-  'gte': '>=',
-  '<': '<',
-  'LT': '<',
-  'lt': '<',
-  '<=': '<=',
-  'LTE': '<=',
-  'lte': '<=',
-  '!=': '!=',
-  'NEQ': '!=',
-  'neq': '!='
-}
+const HAS_FILTER_COMPARATORS_KEYS = [
+  '==',
+  'EQ',
+  'eq',
+  '>',
+  'GT',
+  'gt',
+  '>=',
+  'GTE',
+  'gte',
+  '<',
+  'LT',
+  'lt',
+  '<=',
+  'LTE',
+  'lte',
+  '!=',
+  'NEQ',
+  'neq'
+]
 
-const HAS_FILTER_COMPARATORS_INVERSED = {
-  '==': '!=',
-  'EQ': '!=',
-  'eq': '!=',
-  '>': '<=',
-  'GT': '<=',
-  'gt': '<=',
-  '>=': '<',
-  'GTE': '<',
-  'gte': '<',
-  '<': '>=',
-  'LT': '>=',
-  'lt': '>=',
-  '<=': '>',
-  'LTE': '>',
-  'lte': '>',
-  '!=': '==',
-  'NEQ': '==',
-  'neq': '=='
-}
+const HAS_FILTER_COMPARATORS = _.pick(FILTER_COMPARATORS, HAS_FILTER_COMPARATORS_KEYS)
+
+const HAS_FILTER_COMPARATORS_INVERSED = _.pick(FILTER_COMPARATORS_INVERSED, HAS_FILTER_COMPARATORS_KEYS)
 
 const FILTER_OPERATORS = {
   '&&': 'and',
-  '||': 'or',
   'AND': 'and',
   'and': 'and',
+  '||': 'or',
   'OR': 'or',
   'or': 'or'
+}
+
+const FILTER_OPERATORS_INVERSED = {
+  '&&': 'or',
+  'AND': 'or',
+  'and': 'or',
+  '||': 'and',
+  'OR': 'and',
+  'or': 'and'
 }
 
 const SORT_DIRECTIONS = [
@@ -146,11 +138,17 @@ const API_OPTIONS = {
   for: null,
   first: false,
   filter: null,
+  has: null,
+  hasExample: null,
+  hasFilter: null,
+  hasNot: null,
+  hasNotFilter: null,
   in: null,
   inverse: false,
   keep: null,
   limit: null,
   last: false,
+  notFilter: null,
   pair: null,
   pluck: null,
   relations: null,
@@ -297,48 +295,11 @@ const API_SETTERS = {
 
     return this
   },
-  has (relName, ...args) {
-    // if (this.model.relationsKeys.indexOf(relName) === -1) {
-    //   throw new Error(`Relation "${relName}" doesn't exists (model: ${this.model.name})`)
-    // }
-
-    // if (!args.length) {
-    //   args = [true]
-    // }
-    // const hasFilters = Object.assign({}, this.opts.hasFilters)
-
-    // if (!hasFilters[relName]) {
-    //   hasFilters[relName] = []
-    // }
-
-    // hasFilters[relName] = hasFilters[relName].concat([args])
-
-    // return setApiValue(this, 'hasFilters', hasFilters)
-    return this
+  has (...args) {
+    return setCumulableNaryArgs(this, 'has', args)
   },
-  hasNot (relName, ...args) {
-    // if (!args.length) {
-    //   args = [true]
-    // }
-
-    // if (args.length === 1 && typeof args[0] === 'number') {
-    //   args = ['==', args[0]]
-    // }
-
-    // if (args.length === 1) {
-    //   args[0] = !args[0]
-    // } else {
-    //   args = args.map((value, index) => {
-    //     if (index % 2 === 0) {
-    //       return HAS_FILTER_COMPARATORS_INVERSED[value]
-    //     }
-
-    //     return value
-    //   })
-    // }
-
-    // return this.has.apply(this, [relName].concat(args))
-    return this
+  hasNot (...args) {
+    return setCumulableNaryArgs(this, 'hasNot', args)
   },
   in (...args) {
     if (args.length) {
@@ -417,6 +378,10 @@ const API_SETTERS = {
 
       if (!isFalsyArgs(args)) {
         pair = _.flattenDeep(args).slice(0, 2)
+      }
+
+      if (pair.length === 1) {
+        pair[1] = pair[0]
       }
 
       let api = setApiValue(this, 'pair', pair)
@@ -516,7 +481,9 @@ function MQB (model, opts, excluded) {
   model.relationsKeys.forEach((key) => {
     api[key] = function (value) {
       const relations = Object.assign({}, this.opts.relations)
-      const {pivots, target} = model.relationsPlans[key]
+      const {pivots, pivotsSetters, target} = model.relationsPlans[key]
+      const pivotsSettersLength = pivotsSetters && pivotsSetters.length
+      const validPivots = pivots && pivots.map((x, i) => i + ' - ' + x.name).join(', ')
       const qb = target.mqb
 
       // qb.load = function () {
@@ -529,71 +496,118 @@ function MQB (model, opts, excluded) {
       //   doc[key] = result
       // }
 
-      if (value && !model.typeEdge) {
+      if (value) {
         print('AJOUTER LE PROXY DE CONFIG', model.name, key)
         qb.configure = function () {
           print('CONFIG PROXY', model.name, key)
 
-          pivots.forEach((pivot) => {
-            this[pivot.name] = function (pivotValue) {
+          this.has = function (...args) {
+            if (!args.length) {
+              args = ['==', true]
+            }
+
+            if (args.length === 1 && args[0] == false) {
+              args = ['==', false]
+            }
+
+            return setCumulableNaryArgs(this, 'has', args)
+          }
+
+          this.hasNot = function (...args) {
+            if (!args.length) {
+              args = ['==', true]
+            }
+
+            if (args.length === 1 && args[0] == false) {
+              args = ['==', false]
+            }
+
+            return setCumulableNaryArgs(this, 'hasNot', args)
+          }
+
+          if (!model.typeEdge) {
+            this.edge = function (pivotIndex, pivotValue) {
+              if (typeof pivotIndex !== 'number' && typeof pivotIndex !== 'string') {
+                pivotValue = pivotIndex
+                pivotIndex = 0
+              }
+
+              if (typeof pivotIndex === 'string') {
+                if (!isNaN(Number(pivotIndex))) {
+                  pivotIndex = Number(pivotIndex)
+                } else {
+                  const pivotName = pivotIndex
+                  pivotIndex = pivots.findIndex((x) => x.name === pivotName)
+
+                  if (pivotIndex === -1) {
+                    throw new Error(`Invalid edge name "${pivotName}" (valid values: ${validPivots})`)
+                  }
+                }
+              }
+
+              if (typeof pivotIndex !== 'number' || pivotIndex >= pivots.length) {
+                throw new Error(`Invalid edge index "${pivotIndex}" (valid values: ${validPivots})`)
+              }
+
               const edges = Object.assign({}, this.opts.edges)
+              const pivot = pivots[pivotIndex]
 
               print('PIVOT PIVOT!!', key, pivot.name)
 
               if (pivotValue == false) {
-                delete edges[pivot.name]
+                delete edges[pivotIndex]
               } else {
-                if (!edges[pivot.name]) {
-                  edges[pivot.name] = pivot.mqb
+                if (!edges[pivotIndex]) {
+                  edges[pivotIndex] = pivot.mqb
                 }
 
                 if (~['object', 'function'].indexOf(typeof pivotValue)) {
-                  edges[pivot.name] = edges[pivot.name].configure(pivotValue)
+                  edges[pivotIndex] = edges[pivotIndex].configure(pivotValue)
                 }
               }
 
               return setApiValue(this, 'edges', edges)
             }
-          })
 
-          this.edge = function (pivotName, pivotValue) {
-            if (typeof pivotName !== 'number' && typeof pivotName !== 'string') {
-              pivotValue = pivotName
-              pivotName = 0
+            this.edges = function (pivotsValues) {
+              return Object.keys(pivotsValues)
+                .reduce((acc, key) => acc.edge(key, pivotsValues[key]), this)
             }
 
-            if (typeof pivotName === 'string') {
-              if (!pivots.find((x) => x.name === pivotName)) {
-                throw new Error(`Invalid edge name "${pivotName}" (valid values: ${pivots.map((x, i) => i + ' - ' + x.name).join(', ')})`)                
-              }
-            }
-
-            if (typeof pivotName === 'number') {
-              if (pivotName >= pivots.length) {
-                throw new Error(`Invalid edge index ${pivotName} (valid values: ${pivots.map((x, i) => i + ' - ' + x.name).join(', ')})`)
+            for (let i = 0; i < pivotsSettersLength; i += 2) {
+              const pivotSetter = function (pivotValue) {
+                return this.edge(i / 2, pivotValue)
               }
 
-              pivotName = pivots[pivotName].name
+              this[pivotsSetters[i]] = pivotSetter
+              this[pivotsSetters[i + 1]] = pivotSetter
+
+              if (i + 2 >= pivotsSettersLength) {
+                this.pivot = pivotSetter
+              }
             }
-
-            return this[pivotName].call(this, pivotValue)
-          }
-
-          this.edges = function (pivotsValues) {
-            return Object.keys(pivotsValues)
-              .reduce((acc, key) => acc.edge(key, pivotsValues[key]), this)
           }
 
           let newApi = API_MIXINS.configure.apply(this, arguments)
 
-          if (newApi) {
-            delete newApi.edges
-            delete newApi.edge
+          ;[
+            this,
+            newApi
+          ].forEach((builder) => {
+            delete builder.has
+            delete builder.hasNot
 
-            pivots.forEach((pivot) => {
-              delete newApi[pivot.name]
-            })
-          }
+            if (!model.typeEdge) {
+              delete builder.pivot
+
+              pivotsSetters.forEach((setterName) => {
+                delete builder[setterName]
+              })
+
+              delete builder.edges
+              delete builder.edge
+            }
+          })
 
           return newApi
         }
@@ -673,18 +687,25 @@ function getApiSetterKeys (api) {
 
   if (!api.model.typeEdge) {
     ;[
+      'has',
+      'hasNot',
       'edge',
-      'edges'
+      'edges',
+      'pivot'
     ].forEach((key) => {
       if (typeof api[key] === 'function') {
         setterKeys = setterKeys.concat(key)
       }
     })
 
-    api.model.relationsPivots.forEach((pivot) => {
-      if (typeof api[pivot.name] === 'function') {
-        setterKeys = setterKeys.concat(pivot.name)
-      }
+    const {relationsPlans} = api.model
+
+    Object.keys(relationsPlans).forEach((key)=> {
+      relationsPlans[key].pivotsSetters.forEach((setterName) => {
+        if (setterKeys.indexOf(setterName) === -1 && typeof api[setterName] === 'function') {
+          setterKeys = setterKeys.concat(setterName)
+        }
+      })
     })
   }
 
@@ -706,7 +727,7 @@ function inflateQuery (api) {
 
   // FOR
 
-  query = new ForExpression2(null, opts.for || docName, opts.in || model.collectionName)
+  query = new ForExpression2(null, opts.for || docName, opts.in || model.collectionName)
 
   // FILTER
 
@@ -718,26 +739,10 @@ function inflateQuery (api) {
     }, query)
   }
 
-  // SORT
-
-  const sorts = inflateQuerySorts(api, docName, true)
-
-  if (sorts) {
-    query = query.sort.apply(query, sorts)
-  }
-
-  // LIMIT
-
-  if (opts.first || opts.last) {
-    query = query.limit(1)
-  } else if (opts.limit) {
-    query = query.limit(opts.limit[0], opts.limit[1])
-  }
-
   // COLLECT WITH COUNT INTO and RETURN
 
   if (opts.count) {
-    const resultVarName = `${typeof opts.for === 'string' ? opts.for : Array.isArray(opts.for) ? opts.for[0] : opts.for || model.documentsName}_count`
+    const resultVarName = `${typeof opts.for === 'string' ? opts.for : Array.isArray(opts.for) ? opts.for[0] : opts.for || model.documentsName}_count`
 
     query = query
       .collectWithCountInto(resultVarName)
@@ -748,16 +753,39 @@ function inflateQuery (api) {
     let merged = {}
 
     // Populate relations
+    const hasFilters = []
+    const hasRelations = _.flattenDeep([].concat(opts.has, opts.hasNot))
+      .filter((x) => model.relationsPlans.hasOwnProperty(x))
+
+    if (hasRelations.length && !opts.relations) {
+      opts.relations = {}
+    }
+
+    hasRelations.forEach((key) => {
+      if (!_.has(opts.relations, key)) {
+        opts.relations[key] = model.relationsPlans[key].target.mqb.return(false)
+      }
+    })
 
     if (opts.relations) {
       Object.keys(opts.relations).forEach((key) => {
         const rel = model.relationPlans(key)
         const relResultVarName = `${docName}_${key}`
+        let hidden
+        let pivotQb
         let relAqb
 
         if (model.typeEdge) {
-          relAqb = opts.relations[key]
-            .for(`${docName}_${key}`)
+          const docRef = `${docName}_${key}`
+          let qb = opts.relations[key]
+
+          if (qb.opts.return == false) {
+            hidden = true
+            qb = qb.return(docRef)
+          }
+
+          relAqb = qb
+            .for(docRef)
             .filter('_id', '==', `${docName}.${rel.isOrigin ? '_from' : '_to'}`)
             .first(true)
             .toAQB()
@@ -771,7 +799,7 @@ function inflateQuery (api) {
             const docRef = `${docName}_${key}__${traverseCursor}`
             const docRefEdge = `${docRef}_edge`
             let qb = nextPlan ? target.mqb : opts.relations[key]
-            let qbEdge = _.get(opts.relations[key], ['opts', 'edges', pivot.name])
+            let qbEdge = _.get(opts.relations[key], ['opts', 'edges', index])
 
             qb = qb
               .for(docRef)
@@ -781,7 +809,7 @@ function inflateQuery (api) {
               // .cast(opts.cast)
               // .withEdges(opts.withEdges)
 
-            if (!nextPlan || qbEdge) {
+            if (!nextPlan || qbEdge) {
               qb = qb.for([docRef, docRefEdge])
             }
             
@@ -793,12 +821,22 @@ function inflateQuery (api) {
                 returnedEdge = parseOptionReturn(qbEdge.opts, docRefEdge)
               }
 
+              if (qb.opts.return === false) {
+                hidden = true
+              }
+
               if (opts.withEdges) {
                 qb = qb.return(AQB.expr(`MERGE(${returnedRel.toAQL()}, {_edge: ${returnedEdge.toAQL()}})`))
               } else {
                 qb = qb.return(returnedRel)
               }
             }
+
+            if (!nextPlan) {
+              pivotQb = qb
+            }
+
+            // Merge edges filters and sorts
 
             if (qbEdge) {
               const qbEdgeFilters = inflateQueryFilters(qbEdge, docRefEdge)
@@ -837,14 +875,40 @@ function inflateQuery (api) {
           }
         }
 
-        if (rel.unary) {
+        if (rel.unary || (rel.plans.length > 1 && (pivotQb.opts.pair || pivotQb.opts.count))) {
           relAqb = AQB.expr(`FIRST(${relAqb.toAQL()})`)
         }
 
         query = query.let(relResultVarName, relAqb)
 
-        merged[key] = relResultVarName
+        if (!hidden) {
+          merged[key] = relResultVarName
+        }
       })
+
+      // Apply "has/hasNot" filters
+      ;[].concat(
+        opts.has ? parseOptionHas(opts.has, docName, model, false) : [],
+        opts.hasNot ? parseOptionHas(opts.hasNot, docName, model, true) : []
+      ).forEach((hasFilter) => {
+        query = query.filter(hasFilter)
+      })
+    }
+
+    // SORT
+
+    const sorts = inflateQuerySorts(api, docName, true)
+
+    if (sorts) {
+      query = query.sort.apply(query, sorts)
+    }
+
+    // LIMIT
+
+    if (opts.first || opts.last) {
+      query = query.limit(1)
+    } else if (opts.limit) {
+      query = query.limit(opts.limit[0], opts.limit[1])
     }
 
     // RETURN
@@ -875,15 +939,15 @@ function inflateQueryFilters (api, docName) {
     const example = parseOptionExample(opts.example)
     const exampleFilter = AQB.MATCHES(docName, AQB(example))
 
-    filters = [].concat(filters || [], () => exampleFilter)
+    filters = [].concat(filters || [], () => exampleFilter)
   }
 
   if (opts.filter) {
-    filters = [].concat(filters || [], parseOptionFilter(opts.filter, docName))
+    filters = [].concat(filters || [], parseOptionFilter(opts.filter, docName))
   }
 
   if (opts.notFilter) {
-    filters = [].concat(filters || [], parseOptionFilter(opts.notFilter, docName, true))
+    filters = [].concat(filters || [], parseOptionFilter(opts.notFilter, docName, true))
   }
 
   return filters
@@ -920,6 +984,10 @@ function inflateQuerySorts (api, docName, withDefault) {
 
 function isAQBComparatorName (obj) {
   return typeof obj === 'string' && !!FILTER_COMPARATORS[obj]
+}
+
+function isAQBHasComparatorName (obj) {
+  return typeof obj === 'string' && !!HAS_FILTER_COMPARATORS[obj]
 }
 
 function isAQBOperatorName (obj) {
@@ -1009,6 +1077,8 @@ function parseOptionFilter (args, docName, isNot) {
 }
 
 function parseOptionFilterRaw (raw, docName, isNot) {
+  raw = [].concat(raw)
+
   let filter
   let operator
 
@@ -1049,6 +1119,104 @@ function parseOptionFilterRaw (raw, docName, isNot) {
 
     if (isNot) {
       comparator = FILTER_COMPARATORS_INVERSED[comparator]
+      // operator = FILTER_OPERATORS_INVERSED[operator]
+      // nextOperator = FILTER_OPERATORS_INVERSED[nextOperator]
+    }
+
+    if (!comparison) {
+      comparison = AQB[comparator].call(AQB, left, right)
+    }
+
+   if (!filter) {
+     filter = comparison
+   } else {
+     filter = filter[operator].call(filter, comparison)
+   }
+
+    operator = nextOperator
+  } while (raw.length);
+
+  return filter
+}
+
+function parseOptionHas (args, docName, model, isNot) {
+  const filters = []
+
+  args.forEach((raw) => {
+    let fn
+
+    const filter = parseOptionHasRaw(raw, docName, model, isNot)
+
+    if (filter) {
+      filters.push(filter)
+    }
+  })
+
+  return filters
+}
+
+function parseOptionHasRaw (raw, docName, model, isNot) {
+  raw = [].concat(raw)
+
+  let filter
+  let operator
+
+  do {
+    let comparison, comparator, left, right, nextOperator
+
+    left = raw.shift()
+
+    if (Array.isArray(left)) {
+      comparison = parseOptionHasRaw(left, docName, model, isNot)
+    } else {
+      if (isAQBHasComparatorName(raw[0])) {
+        comparator = raw.shift()
+      }
+
+      if (comparator || (raw.length && !isAQBOperatorName(raw[0]) && (typeof raw[0] !== 'string' || !isNaN(Number(raw[0]))))) {
+        right = raw.shift()
+      } else {
+        right = true
+      }
+    }
+
+    if (isAQBOperatorName(raw[0])) {
+      nextOperator = raw.shift()
+    }
+
+    if (!comparison && !model.relationsPlans[left]) {
+      throw new Error(`Relation "${left}" doesn't exists in model ${model.name}`)
+    }
+
+    const {unary} = model.relationsPlans[left]
+
+    comparator = HAS_FILTER_COMPARATORS[comparator]
+    operator = operator || DEFAULT.FILTER_OPERATOR
+    nextOperator = FILTER_OPERATORS[nextOperator]
+
+    if (docName && typeof left === 'string' && !left.startsWith(docName)) {
+      left = [docName, left].join('_')
+    }
+
+    if (unary) {
+      comparator = comparator || (!!Number(right) ? 'neq' : 'eq')
+      right = null
+    } else {
+      if (typeof left === 'string') {
+        left = AQB.expr(`LENGTH(${left})`)
+      }
+
+      comparator = comparator || (!!Number(right) ? 'gte' : 'eq')
+
+      if (typeof right !== 'number') {
+        right = Number(right)
+      }
+    }
+
+    if (isNot) {
+      comparator = HAS_FILTER_COMPARATORS_INVERSED[comparator]
+      // operator = FILTER_OPERATORS_INVERSED[operator]
+      // nextOperator = FILTER_OPERATORS_INVERSED[nextOperator]
     }
 
     if (!comparison) {
@@ -1209,15 +1377,6 @@ function setBitValue (api, key, args) {
   return setApiValue(api, key, enable)
 }
 
-function setCumulableNaryValues (api, key, args) {
-  if (!isEmptyArgs(args)) {
-    args = !isFalsyArgs(args) ? [].concat(api.opts[key] || [], args) : null
-    return setApiValue(api, key, args)
-  }
-
-  return api
-}
-
 function setCumulableNaryArgs (api, key, args) {
   args = [args]
   return setCumulableNaryValues(api, key, args)
@@ -1233,6 +1392,15 @@ function setCumulableNaryArgsList (api, key, args) {
   return args.reduce((acc, subArgs) => {
     return setCumulableNaryArgs(acc, key, subArgs)
   }, api)
+}
+
+function setCumulableNaryValues (api, key, args) {
+  if (!isEmptyArgs(args)) {
+    args = !isFalsyArgs(args) ? [].concat(api.opts[key] || [], args) : null
+    return setApiValue(api, key, args)
+  }
+
+  return api
 }
 
 module.exports = Object.assign(MQB.bind(null), {
@@ -1251,6 +1419,7 @@ module.exports = Object.assign(MQB.bind(null), {
   inflateQueryFilters,
   inflateQuerySorts,
   isAQBComparatorName,
+  isAQBHasComparatorName,
   isAQBOperatorName,
   isAQBObject,
   isEmptyArgs,
@@ -1259,6 +1428,8 @@ module.exports = Object.assign(MQB.bind(null), {
   parseOptionExample,
   parseOptionFilter,
   parseOptionFilterRaw,
+  parseOptionHas,
+  parseOptionHasRaw,
   parseOptionKeep,
   parseOptionPair,
   parseOptionPluck,
@@ -1266,7 +1437,7 @@ module.exports = Object.assign(MQB.bind(null), {
   parseOptionSort,
   setApiValue,
   setBitValue,
-  setCumulableNaryValues,
   setCumulableNaryArgs,
   setCumulableNaryArgsList,
+  setCumulableNaryValues,
 })

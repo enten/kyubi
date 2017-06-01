@@ -222,9 +222,9 @@ class Model {
   }
 
   /** @final */
-  static get relationsPivots () {
-    return lazyProperty(this, '_relationsPivots', getRelationsPivots)
-  }
+  // static get relationsPivots () {
+  //   return lazyProperty(this, '_relationsPivots', getRelationsPivots)
+  // }
 
   /** @overridable */
   static get queryScopes () {
@@ -1906,18 +1906,19 @@ function getModelTimestampAttributes (model) {
   )
 }
 
-function getRelationsPivots (model) {
-  const relations = model.relationsPlans
+// function getRelationsPivots (model) {
+//   const relations = model.relationsPlans
 
-  return Object.keys(relations)
-    .reduce((acc, key) => acc.concat(relations[key].pivots), [])
-    .filter((pivot, index, arr) => arr.indexOf(pivot) === index)
-    .sort((a, b) => a.name < b.name ? -1 : a.name > b.name ? 1 : 0)
-}
+//   return Object.keys(relations)
+//     .reduce((acc, key) => acc.concat(relations[key].pivots), [])
+//     .filter((pivot, index, arr) => arr.indexOf(pivot) === index)
+//     .sort((a, b) => a.name < b.name ? -1 : a.name > b.name ? 1 : 0)
+// }
 
 function getRelationsPlans (model) {
   const relations = {}
 
+  // Edge model
   if (model.typeEdge) {
     const edgeRelations = model.relations
     const jointure = model.join
@@ -1951,8 +1952,10 @@ function getRelationsPlans (model) {
         unary: true
       }
     })
+  // Document model
   } else {
     model.relationsKeys.forEach((key) => {
+      const pivotsSetters = []
       let joinPlans = model.relations[key]
 
       if (!Array.isArray(joinPlans) && typeof joinPlans !== 'string') {
@@ -1966,7 +1969,7 @@ function getRelationsPlans (model) {
       let prevModel = model
       let traverseCursor = []
 
-      joinPlans = joinPlans.map((relModelName) => {
+      joinPlans = joinPlans.map((relModelName, index) => {
         const dotPos = relModelName.indexOf('.')
         let isOrigin
         let isTarget
@@ -2025,6 +2028,18 @@ function getRelationsPlans (model) {
 
         traverseCursor.push(target.documentName)
 
+        pivotsSetters.push(`edge${index}`)
+
+        let setterRelName = relModel.name
+
+        for (
+          let i = 1;
+          ~pivotsSetters.indexOf(setterRelName);
+          setterRelName = `${relModel.name}${++i}`
+        );
+
+        pivotsSetters.push(setterRelName)
+
         const plan = {
           jointure,
           isOrigin,
@@ -2046,6 +2061,7 @@ function getRelationsPlans (model) {
       relations[key] = {
         models: joinPlans.reduce((acc, {target}) => acc.concat(target), [model]),
         pivots: joinPlans.map(({pivot}) => pivot),
+        pivotsSetters,
         plans: joinPlans,
         origin: model,
         target: prevModel,
