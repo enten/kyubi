@@ -153,7 +153,8 @@ const API_OPTIONS = {
   sort: null,
   sortRand: false,
   trashed: false,
-  withEdges: true
+  withCount: null,
+  withEdges: null
 }
 
 const API_MIXINS = {
@@ -444,6 +445,9 @@ const API_SETTERS = {
   trashed (...args) {
     return setBitValue(this, 'trashed', args)
   },
+  withCount (...args) {
+    return setBitValue(this, 'withCount', args)
+  },
   withEdges (...args) {
     return setBitValue(this, 'withEdges', args)
   }
@@ -657,7 +661,7 @@ function getApiSetterKeys (api) {
     ;[
       'edge',
       'edges',
-      'pivot'
+      'pivot',
     ].forEach((key) => {
       if (typeof api[key] === 'function') {
         setterKeys = setterKeys.concat(key)
@@ -738,7 +742,7 @@ function inflateQuery (api) {
         const rel = model.relationPlans(key)
         const relResultVarName = `${docName}_${key}`
         let hidden
-        let pivotQb
+        let relQb
         let relAqb
 
         if (model.typeEdge) {
@@ -750,11 +754,12 @@ function inflateQuery (api) {
             qb = qb.return(docRef)
           }
 
-          relAqb = qb
+          relQb = qb
             .for(docRef)
             .filter('_id', '==', `${docName}.${rel.isOrigin ? '_from' : '_to'}`)
             .first(true)
-            .toAQB()
+          
+          relAqb = relQb.toAQB()
         } else {
           let prevDocRef = docName
 
@@ -772,11 +777,16 @@ function inflateQuery (api) {
               .in(AQB.expr(`${direction} ${prevDocRef}._id ${pivot.collectionName}`))
               .first(unary)
               .distinct(!index && rel.plans.length && nextPlan)
-              // .cast(opts.cast)
-              // .withEdges(opts.withEdges)
 
             if (!nextPlan || qbEdge) {
               qb = qb.for([docRef, docRefEdge])
+            }
+
+            if (!nextPlan) {
+              relQb = qb
+                .cast(qb.opts.cast != null ? qb.opts.cast : opts.cast)
+                .withCount(qb.opts.withCount != null ? qb.opts.withCount : opts.withCount)
+                .withEdges(qb.opts.withEdges != null ? qb.opts.withEdges : opts.withEdges)
             }
             
             if (!nextPlan && !qb.opts.count && !qb.opts.pair && !qb.opts.pluck) {
@@ -791,15 +801,11 @@ function inflateQuery (api) {
                 hidden = true
               }
 
-              if (opts.withEdges) {
+              if (relQb.opts.withEdges) {
                 qb = qb.return(AQB.expr(`MERGE(${returnedRel.toAQL()}, {_edge: ${returnedEdge.toAQL()}})`))
               } else {
                 qb = qb.return(returnedRel)
               }
-            }
-
-            if (!nextPlan) {
-              pivotQb = qb
             }
 
             // Merge edges filters and sorts
@@ -841,7 +847,7 @@ function inflateQuery (api) {
           }
         }
 
-        if (rel.unary || (rel.plans.length > 1 && (pivotQb.opts.pair || pivotQb.opts.count))) {
+        if (rel.unary || (rel.plans.length > 1 && (relQb.opts.pair || relQb.opts.count))) {
           relAqb = AQB.expr(`FIRST(${relAqb.toAQL()})`)
         }
 
@@ -849,6 +855,10 @@ function inflateQuery (api) {
 
         if (!hidden) {
           merged[key] = relResultVarName
+        }
+
+        if (relQb.opts.withCount) {
+          merged[`${key}Count`] = AQB.expr(rel.unary ? `${relResultVarName} ? 1 : 0` : `LENGTH(${relResultVarName})`)
         }
       })
 
@@ -1268,7 +1278,7 @@ function parseOptionReturn (opts, docName, merged = {}) {
     }
   }
 
-  if (opts.return) {
+  if (opts.return && typeof opts.return !== 'boolean') {
     returned = opts.return
   }
 
