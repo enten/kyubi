@@ -221,11 +221,6 @@ class Model {
     return lazyProperty(this, '_relationsPlans', getRelationsPlans)
   }
 
-  /** @final */
-  // static get relationsPivots () {
-  //   return lazyProperty(this, '_relationsPivots', getRelationsPivots)
-  // }
-
   /** @overridable */
   static get queryScopes () {
     return null
@@ -1905,15 +1900,6 @@ function getModelTimestampAttributes (model) {
     model.timestamps || []
   )
 }
-
-// function getRelationsPivots (model) {
-//   const relations = model.relationsPlans
-
-//   return Object.keys(relations)
-//     .reduce((acc, key) => acc.concat(relations[key].pivots), [])
-//     .filter((pivot, index, arr) => arr.indexOf(pivot) === index)
-//     .sort((a, b) => a.name < b.name ? -1 : a.name > b.name ? 1 : 0)
-// }
 
 function getRelationsPlans (model) {
   const relations = {}
