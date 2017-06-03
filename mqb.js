@@ -153,6 +153,7 @@ const API_OPTIONS = {
   sort: null,
   sortRand: false,
   trashed: false,
+  with: null,
   withCount: null,
   withEdges: null
 }
@@ -445,6 +446,9 @@ const API_SETTERS = {
   trashed (...args) {
     return setBitValue(this, 'trashed', args)
   },
+  with (...args) {
+    return setCumulableNaryArgs(this, 'with', args)
+  },
   withCount (...args) {
     return setBitValue(this, 'withCount', args)
   },
@@ -661,7 +665,7 @@ function getApiSetterKeys (api) {
     ;[
       'edge',
       'edges',
-      'pivot',
+      'pivot'
     ].forEach((key) => {
       if (typeof api[key] === 'function') {
         setterKeys = setterKeys.concat(key)
@@ -723,7 +727,23 @@ function inflateQuery (api) {
     let merged = {}
 
     // Populate relations
-    const hasFilters = []
+
+    if (opts.with) {
+      _.flattenDeep(opts.with).forEach((value) => {
+        value.split('.').reduce((acc, key) => {
+          if (!acc.opts.relations) {
+            acc.opts.relations = {}
+          }
+
+          if (!acc.opts.relations[key]) {
+            acc.opts.relations[key] = acc.model.relationsPlans[key].target.mqb
+          }
+
+          return acc.opts.relations[key]
+        }, api)
+      })
+    }
+
     const hasRelations = _.flattenDeep([].concat(opts.has, opts.hasNot))
       .filter((x) => model.relationsPlans.hasOwnProperty(x))
 
@@ -732,7 +752,7 @@ function inflateQuery (api) {
     }
 
     hasRelations.forEach((key) => {
-      if (!_.has(opts.relations, key)) {
+      if (!opts.relations[key]) {
         opts.relations[key] = model.relationsPlans[key].target.mqb.return(false)
       }
     })
@@ -758,7 +778,7 @@ function inflateQuery (api) {
             .for(docRef)
             .filter('_id', '==', `${docName}.${rel.isOrigin ? '_from' : '_to'}`)
             .first(true)
-          
+
           relAqb = relQb.toAQB()
         } else {
           let prevDocRef = docName
