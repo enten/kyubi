@@ -494,34 +494,7 @@ function MQB (model, opts, excluded) {
       // }
 
       if (value) {
-        print('AJOUTER LE PROXY DE CONFIG', model.name, key)
         qb.configure = function () {
-          print('CONFIG PROXY', model.name, key)
-
-          this.has = function (...args) {
-            if (!args.length) {
-              args = ['==', true]
-            }
-
-            if (args.length === 1 && args[0] == false) {
-              args = ['==', false]
-            }
-
-            return setCumulableNaryArgs(this, 'has', args)
-          }
-
-          this.hasNot = function (...args) {
-            if (!args.length) {
-              args = ['==', true]
-            }
-
-            if (args.length === 1 && args[0] == false) {
-              args = ['==', false]
-            }
-
-            return setCumulableNaryArgs(this, 'hasNot', args)
-          }
-
           if (!model.typeEdge) {
             this.edge = function (pivotIndex, pivotValue) {
               if (typeof pivotIndex !== 'number' && typeof pivotIndex !== 'string') {
@@ -548,8 +521,6 @@ function MQB (model, opts, excluded) {
 
               const edges = Object.assign({}, this.opts.edges)
               const pivot = pivots[pivotIndex]
-
-              print('PIVOT PIVOT!!', key, pivot.name)
 
               if (pivotValue == false) {
                 delete edges[pivotIndex]
@@ -684,8 +655,6 @@ function getApiSetterKeys (api) {
 
   if (!api.model.typeEdge) {
     ;[
-      'has',
-      'hasNot',
       'edge',
       'edges',
       'pivot'
