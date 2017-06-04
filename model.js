@@ -1251,30 +1251,6 @@ class Model {
     return modelTrashed.recover(doc, _.pick(opts, CRUD_OPTIONS_KEYS))
   }
 
-  static relationPlans (key) {
-    const relations = this.relationsPlans
-
-    if (key === '*') {
-      return relations
-    }
-
-    if (key === '...*') {
-      return this.relationsKeys.map((x) => [x, this.relationPlans(x)])
-    }
-
-    if (Array.isArray(key)) {
-      return key.map((x) => this.relationPlans(x))
-    }
-
-    const rel = relations[key]
-
-    if (!rel) {
-      throw new Error(`Relation "${key}" is missing (model: ${this.name})`)
-    }
-
-    return rel
-  }
-
   static remove (doc, opts = {}) {
     if (Array.isArray(doc)) {
       return doc.map((x) => this.remove(x, opts))

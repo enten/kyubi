@@ -759,7 +759,7 @@ function inflateQuery (api) {
 
     if (opts.relations) {
       Object.keys(opts.relations).forEach((key) => {
-        const rel = model.relationPlans(key)
+        const rel = model.relationsPlans[key]
         const relResultVarName = `${docName}_${key}`
         let hidden
         let relQb
