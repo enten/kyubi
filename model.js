@@ -427,11 +427,44 @@ class Model {
       }
 
       if (result && !result._modelInstance && !result.error) {
-        return this.fromDb(result)
+        result = this.fromDb(result)
       }
+
+      this.castQueryResultRelations(result, qb)
     }
 
     return result
+  }
+
+  static castQueryResultRelations (data, qb) {
+    const {cast, relations} = qb.opts
+
+    Object.keys(relations).forEach((key) => {
+      const relOpts = relations[key].opts
+
+      if (data[key] && !relOpts.count && !relOpts.pair && !relOpts.pluck && (relOpts.cast ||( cast && relOpts.cast != false))) {
+        const {target} = qb.model.relationsPlans[key]
+        const inflateRelation = (values) => {
+          if (values._edge) {
+            values._edge = new qb.model.relationsPlans[key].pivot(values._edge)
+          }
+
+          if (relOpts.relations) {
+            values = this.castQueryResultRelations(values, relations[key])
+          }
+
+          return new target(values)
+        }
+
+        if (Array.isArray(data[key])) {
+          data[key] = data[key].map((x) => inflateRelation(x))
+        } else {
+          data[key] = inflateRelation(data[key])
+        }
+      }
+    })
+
+    return data
   }
 
   static clean (opts) {
@@ -629,17 +662,9 @@ class Model {
       doc = new this(doc)
     }
 
-    // const related = _.pick(data, this.relationsKeys)
-
     data = _.omit(data, this.metaSpecials)
 
     this.deserializeTimestamps(data)
-
-    // Object.keys(related).forEach((key) => {
-    //   const modelName = this.relations[key].model
-    //   const model = this.db._models[modelName]
-    //   data[key] = model.castQueryResult(related[key])
-    // })
 
     Object.assign(doc, data)
 
@@ -2046,6 +2071,7 @@ function getRelationsPlans (model) {
 
       relations[key] = {
         models: joinPlans.reduce((acc, {target}) => acc.concat(target), [model]),
+        pivot: _.last(joinPlans).pivot,
         pivots: joinPlans.map(({pivot}) => pivot),
         pivotsSetters,
         plans: joinPlans,

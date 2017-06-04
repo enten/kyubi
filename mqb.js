@@ -765,6 +765,11 @@ function inflateQuery (api) {
         let relQb
         let relAqb
 
+        const inheritQbOptions = (qb) => qb
+          .cast(qb.opts.cast != null ? qb.opts.cast : opts.cast)
+          .withCount(qb.opts.withCount != null ? qb.opts.withCount : opts.withCount)
+          .withEdges(qb.opts.withEdges != null ? qb.opts.withEdges : opts.withEdges)
+
         if (model.typeEdge) {
           const docRef = `${docName}_${key}`
           let qb = opts.relations[key]
@@ -774,10 +779,10 @@ function inflateQuery (api) {
             qb = qb.return(docRef)
           }
 
-          relQb = qb
+          relQb = inheritQbOptions(qb
             .for(docRef)
             .filter('_id', '==', `${docName}.${rel.isOrigin ? '_from' : '_to'}`)
-            .first(true)
+            .first(true))
 
           relAqb = relQb.toAQB()
         } else {
@@ -803,10 +808,7 @@ function inflateQuery (api) {
             }
 
             if (!nextPlan) {
-              relQb = qb
-                .cast(qb.opts.cast != null ? qb.opts.cast : opts.cast)
-                .withCount(qb.opts.withCount != null ? qb.opts.withCount : opts.withCount)
-                .withEdges(qb.opts.withEdges != null ? qb.opts.withEdges : opts.withEdges)
+              relQb = inheritQbOptions(qb)
             }
             
             if (!nextPlan && !qb.opts.count && !qb.opts.pair && !qb.opts.pluck) {
