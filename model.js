@@ -2060,7 +2060,8 @@ function getMetaTimestampAttributes (model) {
   return [].concat(
     model.createTimestamp || [],
     model.updateTimestamp || [],
-    model.partitionTimestamp || []
+    Object.keys(model.partitionsModels)
+      .map((key) => model.partitionsModels[key].partitionTimestamp || [])
   )
 }
 
