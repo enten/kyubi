@@ -439,30 +439,37 @@ class Model {
   static castQueryResultRelations (data, qb) {
     const {cast, relations} = qb.opts
 
-    Object.keys(relations).forEach((key) => {
-      const relOpts = relations[key].opts
+    if (relations) {
+      Object.keys(relations).forEach((key) => {
+        const relOpts = relations[key].opts
 
-      if (data[key] && !relOpts.count && !relOpts.pair && !relOpts.pluck && (relOpts.cast ||( cast && relOpts.cast != false))) {
-        const {target} = qb.model.relationsPlans[key]
-        const inflateRelation = (values) => {
-          if (values._edge) {
-            values._edge = new qb.model.relationsPlans[key].pivot(values._edge)
+        if (data[key] && !relOpts.count && !relOpts.pair && !relOpts.pluck && (relOpts.cast ||( cast && relOpts.cast != false))) {
+          const {target} = qb.model.relationsPlans[key]
+          const inflateRelation = (values) => {
+            if (values._edge) {
+              const relPlans = qb.model.relationsPlans[key]
+              const relPivotsLength = relPlans.pivots.length
+
+              if (!relOpts.edges || !relOpts.edges[relPivotsLength - 1] || relOpts.edges[relPivotsLength - 1].opts.cast != false) {
+                values._edge = new relPlans.pivot(values._edge)
+              }
+            }
+
+            if (relOpts.relations) {
+              values = this.castQueryResultRelations(values, relations[key])
+            }
+
+            return new target(values)
           }
 
-          if (relOpts.relations) {
-            values = this.castQueryResultRelations(values, relations[key])
+          if (Array.isArray(data[key])) {
+            data[key] = data[key].map((x) => inflateRelation(x))
+          } else {
+            data[key] = inflateRelation(data[key])
           }
-
-          return new target(values)
         }
-
-        if (Array.isArray(data[key])) {
-          data[key] = data[key].map((x) => inflateRelation(x))
-        } else {
-          data[key] = inflateRelation(data[key])
-        }
-      }
-    })
+      })
+    }
 
     return data
   }
