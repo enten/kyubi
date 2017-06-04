@@ -255,7 +255,7 @@ const API_MIXINS = {
     return this.toAQB().toAQL()
   },
   _PRINT (context) {
-    context.output += `ModelQueryBuilder (${this.model.name})`
+    context.output += `ModelQueryBuilder (${this.model.modelName})`
     context.output += ' '
     printObject(this.opts, context)
   }

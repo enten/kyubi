@@ -21,11 +21,13 @@ const COLLECTION_TYPES = {
 }
 
 const CRUD_OPTIONS_KEYS = [
+  'force',
   'keepNull',
   'mergeObjects',
   'overwrite',
   'returnNew',
   'returnOld',
+  'safe',
   'silent',
   'waitForSync'
 ]
@@ -92,9 +94,9 @@ class Model {
     return true
   }
 
-  /** @final */
-  static get _modelTrashed () {
-    return false
+  /** @overridable */
+  static get allowUnknown () {
+    return true
   }
 
   /** @final */
@@ -108,8 +110,8 @@ class Model {
   }
 
   /** @overridable */
-  static get allowUnknown () {
-    return true
+  static get archiveTimestamp () {
+    return 'archivedAt'
   }
 
   /** @final */
@@ -120,11 +122,6 @@ class Model {
   /** @overridable */
   static get collectionName () {
     return lazyProperty(this, '_collectionName', getCollectionName)
-  }
-
-  /** @overridable */
-  static get collectionTrashedName () {
-    return lazyProperty(this, '_collectionTrashedName', getCollectionTrashedName)
   }
 
   /** @final */
@@ -192,6 +189,11 @@ class Model {
   }
 
   /** @final */
+  static get modelName () {
+    return lazyProperty(this, '_modelName', getModelName)
+  }
+
+  /** @final */
   static get modelTimestamps () {
     return lazyProperty(this, '_modelTimestamps', getModelTimestampAttributes)
   }
@@ -201,9 +203,49 @@ class Model {
     return lazyProperty(this, '_mqb', getModelQueryBuilder)
   }
 
+  /** @final */
+  static get partition () {
+    return null
+  }
+
+  /** @overridable */
+  static get partitionArchived () {
+    return 'archived'
+  }
+
+  /** @final */
+  static get partitionName () {
+    return null
+  }
+
+  /** @final */
+  static get partitionTimestamp () {
+    return null
+  }
+
+  /** @overridable */
+  static get partitionTrashed () {
+    return 'trashed'
+  }
+
+  /** @overridable */
+  static get partitions () {
+    return null
+  }
+
+  /** @final */
+  static get partitionsModels () {
+    return this._partitionsModels
+  }
+
   /** @overridable */
   static get pageSize () {
     return null
+  }
+
+  /** @overridable */
+  static get recoverTimestamp () {
+    return 'recoveredAt'
   }
 
   /** @overridable */
@@ -239,11 +281,6 @@ class Model {
   /** @overridable */
   static get timestamps () {
     return null
-  }
-
-  /** @final */
-  static get trashed () {
-    return lazyProperty(this, '_trashed', createModelTrashed)
   }
 
   /** @final */
@@ -399,7 +436,7 @@ class Model {
       cursor.next = (cast) => {
         let doc = next()
         if (cast != null ? cast != false : (qb && qb.opts.cast != false)) {
-          doc = this.castQueryResult(doc)
+          doc = this.castQueryResult(doc, qb)
         }
         if (!first) {
           first = doc
@@ -430,7 +467,9 @@ class Model {
         result = this.fromDb(result)
       }
 
-      this.castQueryResultRelations(result, qb)
+      if (qb) {
+        this.castQueryResultRelations(result, qb)
+      }
     }
 
     return result
@@ -476,12 +515,6 @@ class Model {
 
   static clean (opts) {
     return this.removeByKeys(this.keys().toArray(), opts)
-  }
-
-  static cleanTrashed (opts) {
-    const modelTrashed = this._modelTrashed ? this : this.trashed
-
-    return modelTrashed.clean(opts)
   }
 
   static closedRange () {
@@ -1090,7 +1123,7 @@ class Model {
       .filter(attr, '>=', left, '&&', attr, '<', right)
   }
 
-  // TODO utiliser mqb ????
+  // TODO using mqb ????
   static outEdges (data) {
     const result = this.collection.outEdges(data)
     const resultCasted = this.castQueryResult(result)
@@ -1157,56 +1190,72 @@ class Model {
       .fetch()
   }
 
-  static recover (doc, opts = {}) {
+  static moveInto (partitionModel, doc, opts = {}) {
     if (Array.isArray(doc)) {
-      return doc.map((x) => this.recover(x, opts))
+      return doc.map((x) => this.moveInto(partitionModel, x, opts))
     }
 
-    const model = this._modelTrashed ? this.prototype.__proto__.constructor : this
-    const modelTrashed = model.trashed
+    if (typeof partitionModel === 'string') {
+      partitionModel = partitionModel === 'main' ? model.partitionMain : this.partitionsModels[partitionModel]
+    }
+
+    const model = this
 
     if (typeof doc === 'number' || !doc._modelInstance) {
-      doc = modelTrashed.document(doc)
+      doc = model.document(doc)
     }
 
     const id = doc._key || doc._id
 
     if (!id) {
-      throw new Error('Cannot recover document without _key or _id')
+      throw new Error(`Cannot move document without _key or _id (from ${model.partition || 'main'} into ${partitionKey}`)
     }
 
     if (opts.mutate == false) {
-      doc = new modelTrashed(doc)
+      doc = new partitionModel(doc)
     }
 
-    if (model.deleteTimestamp) {
-      _.set(doc, model.deleteTimestamp, null)
+    if (model.partitionTimestamp) {
+      _.set(doc, model.partitionTimestamp, null)
+    }
+
+    const now = Date.now()
+
+    if (partitionModel.partitionTimestamp) {
+      _.set(doc, partitionModel.partitionTimestamp, new Date(now))
     }
 
     if (model.updateTimestamp) {
-      _.set(doc, model.updateTimestamp, new Date())
+      _.set(doc, model.updateTimestamp, new Date(now))
     }
 
-    let recoveredInstance
+    let partitionInstance
     let meta
 
-    delete doc._original_meta
+    partitionInstance = partitionModel.create(doc, opts)
 
-    recoveredInstance = model.create(doc, opts)
-
-    meta = modelTrashed.collection.remove(id, opts)
+    meta = model.collection.remove(id, opts)
 
     if (opts.mutate == false) {
-      doc = new model(recoveredInstance)
+      doc = partitionInstance
     } else {
-      model.fill(doc, recoveredInstance)
-      model.fillSpecials(doc, recoveredInstance)
+      model.fill(doc, partitionInstance)
+      model.fillSpecials(doc, partitionInstance)
 
-      if (doc._trashed) {
-        Object.defineProperty(doc, '_trashed', {
+      if (model.partition && doc['_' + model.partition]) {
+        Object.defineProperty(doc, '_' + model.partition, {
           configurable: true,
           enumerable: false,
           value: false,
+          writable: false
+        })
+      }
+
+      if (partitionModel.partition && !doc['_' + partitionModel.partition]) {
+        Object.defineProperty(doc, '_' + partitionModel.partition, {
+          configurable: true,
+          enumerable: false,
+          value: true,
           writable: false
         })
       }
@@ -1224,34 +1273,11 @@ class Model {
     return doc
   }
 
-  static recoverByExample (example, opts) {
-    const modelTrashed = this._modelTrashed ? this : this.trashed
-    const recoverOpts = _.pick(opts, CRUD_OPTIONS_KEYS)
-
-    return modelTrashed.mqbByExample(example, opts)
-      .cast(false)
-      .iterate((doc) => modelTrashed.recover(doc, recoverOpts))
-  }
-
-  static recoverByKeys (keys, opts) {
-    return this.recover(_.castArray(keys), opts)
-  }
-
-  static recoverFirstExample (example, opts) {
-    const modelTrashed = this._modelTrashed ? this : this.trashed
-
-    const doc = modelTrashed.mqbFirstExample(example, opts)
-      .cast(false)
-      .fetch()
-
-    if (!doc) {
-      return null
+  static remove (doc, opts = {}) {
+    if (opts.safe != false && !opts.force && this.partitionTrashed) {
+      return this.moveInto(this.partitionTrashed, doc, opts)
     }
 
-    return modelTrashed.recover(doc, _.pick(opts, CRUD_OPTIONS_KEYS))
-  }
-
-  static remove (doc, opts = {}) {
     if (Array.isArray(doc)) {
       return doc.map((x) => this.remove(x, opts))
     }
@@ -1280,26 +1306,12 @@ class Model {
       _.set(doc, this.updateTimestamp, new Date(now))
     }
 
-    const trashedModel = this.trashed
-    let trashedInstance
     let meta
 
     meta = this.collection.remove(id, opts)
 
-    if (trashedModel && opts.safe != false) {
-      trashedInstance = trashedModel.create(doc)
-
-      if (opts.mutate == false) {
-        doc = trashedInstance
-      }
-    }
-
-    if (trashedInstance && doc !== trashedInstance) {
-      this.fillSpecials(doc, trashedInstance)
-    }
-
-    if (!doc._trashed) {
-      Object.defineProperty(doc, '_trashed', {
+    if (this.partitionTrashed && !doc['_' + this.partitionTrashed]) {
+      Object.defineProperty(doc, '_' + this.partitionTrashed, {
         configurable: true,
         enumerable: false,
         value: true,
@@ -1523,7 +1535,7 @@ class Model {
   }
 
   static _PRINT (context) {
-    context.output += `[Model "${this.name}" (collection: ${this.collectionName}${this._modelTrashed ? ', model trashed' : ''})]`
+    context.output += `[Model "${this.modelName}" (collection: ${this.collectionName})]`
   }
 
   constructor (data) {
@@ -1556,10 +1568,6 @@ class Model {
     return true
   }
 
-  get _trashed () {
-    return false
-  }
-
   _edges () {
     return this.constructor.edges(this)
   }
@@ -1586,10 +1594,6 @@ class Model {
 
   _remove (opts) {
     return this.constructor.remove(this, opts)
-  }
-
-  _recover (opts) {
-    return this.constructor.recover(this, opts)
   }
 
   _save (opts) {
@@ -1626,7 +1630,7 @@ class Model {
   }
 
   toString () {
-    return `${this.constructor.name}${this._trashed ? 'Trashed' :''}: ${this._id || '<new>'}`
+    return `${this.constructor.modelName}: ${this._id || '<new>'}`
   }
 
   _PRINT (context) {
@@ -1718,46 +1722,212 @@ function bootstrapModel (model, db) {
     }
   }
 
+  const partitionsModels = createPartitionsModels(model)
+
+  Object.defineProperty(model, '_partitionsModels', {
+    value: partitionsModels
+  })
+
+  Object.keys(partitionsModels).forEach((key) => {
+    const partitionModel = partitionsModels[key]
+
+    Object.defineProperty(db._models, partitionModel.modelName, {
+      value: partitionModel
+    })
+  })
+
   return model
 }
 
-function createModelTrashed (model) {
-  if (!model.collectionTrashedName) {
-    return null
+function createPartitionsModels (model) {
+  const partitionsModels = {}
+  const partitionsPlans = {}
+
+  partitionsPlans.main = {
+    collectionName: model.collectionName,
+    moveMethod: 'recover',
+    timestampKey: model.recoverTimestamp
   }
 
-  return class ModelTrashed extends model {
-    static get _modelTrashed () {
-      return true
-    }
-
-    static get collectionName () {
-      return model.collectionTrashedName
-    }
-
-    static get collectionTrashedName () {
-      return null
-    }
-
-    static get db () {
-      return model.db
-    }
-
-    static get name () {
-      return model.name
-    }
-
-    get _trashed () {
-      return modeltrue
+  if (model.partitionArchived) {
+    partitionsPlans[model.partitionArchived] = {
+      moveMethod: 'archive',
+      timestampKey: model.archiveTimestamp
     }
   }
+
+  if (model.partitionTrashed) {
+    model.partitionTrashed
+    partitionsPlans[model.partitionTrashed] = {
+      moveMethod: 'softRemove',
+      timestampKey: model.deleteTimestamp
+    }
+  }
+
+  Object.assign(partitionsPlans, model.partitions)
+
+  Object.keys(partitionsPlans).forEach((key) => {
+    const partitionName = _.upperFirst(key)
+    const plan = partitionsPlans[key]
+
+    if (!plan.collectionName) {
+      plan.collectionName = [model.collectionName, key].join('_')
+    }
+
+    if (!plan.timestampKey) {
+      plan.timestampKey = key + 'At'
+    }
+
+    plan.relations = model.relations
+    plan.join = model.join
+
+    if (plan.relations) {
+      plan.relations = Object.assign({}, plan.relations)
+
+      Object.keys(plan.relations).forEach((relName) => {
+        plan.relations[relName] = _.flattenDeep(_.castArray(plan.relations[relName]))
+          .reduce((acc, x) => acc.concat(x.split('~')), [])
+          .map((x) => {
+            x = x.trim()
+
+            const dotPos = x.indexOf('.')
+
+            if (~dotPos) {
+              x = x.substring(0, dotPos) + partitionName + x.substring(dotPos)
+            } else {
+              x = x + partitionName
+            }
+
+            return x
+          })
+          .join(' ~ ')
+        })
+    }
+
+    if (plan.join) {
+      plan.join = Object.assign({}, plan.join)
+
+      plan.join.from += partitionName
+      plan.join.to += partitionName
+    }
+
+    const partitionModel = class PartitionModel extends model {
+      static get collectionName () {
+        return plan.collectionName
+      }
+
+      static get db () {
+        return model.db
+      }
+
+      static get name () {
+        return model.name
+      }
+
+      static get join () {
+        return plan.join
+      }
+
+      static get partition () {
+        return key
+      }
+
+      static get partitionName () {
+        return partitionName
+      }
+
+      static get partitionTimestamp () {
+        return plan.timestampKey
+      }
+
+      static get relations () {
+        return plan.relations
+      }
+    }
+
+    Object.defineProperties(model, {
+      [key]: {
+        value: partitionModel
+      },
+      [`partition${partitionName}`]: {
+        value: partitionModel
+      },
+      [`_${key}`]: {
+        get: () => false
+      }
+    })
+
+    Object.defineProperty(model.prototype, `_${key}`, {
+      get: () => false
+    })
+
+    Object.defineProperty(partitionModel, `_${key}`, {
+      get: () => true
+    })
+
+    Object.defineProperty(partitionModel.prototype, `_${key}`, {
+      get: () => true
+    })
+
+    if (plan.moveMethod) {
+      Object.defineProperties(model, {
+        [plan.moveMethod]: {
+          value: function (doc, opts) {
+            return this.moveInto.call(this, partitionModel, doc, opts)
+          }
+        },
+        [`${plan.moveMethod}ByExample`]: {
+          value: function (example, opts) {
+            const recoverOpts = _.pick(opts, CRUD_OPTIONS_KEYS)
+
+            return this.mqbByExample(example, opts)
+              .cast(false)
+              .iterate((doc) => this[plan.moveMethod].call(this, doc, recoverOpts))
+          }
+        },
+        [`${plan.moveMethod}ByKeys`]: {
+          value: function (keys, opts) {
+            return this[plan.moveMethod].call(this, _.castArray(keys), opts)
+          }
+        },
+        [`${plan.moveMethod}FirstExample`]: {
+          value: function (example, opts) {
+            const doc = this.mqbFirstExample(example, opts)
+              .cast(false)
+              .fetch()
+
+            if (!doc) {
+              return null
+            }
+
+            return this[plan.moveMethod].call(this, doc, _.pick(opts, CRUD_OPTIONS_KEYS))
+          }
+        },
+        [`clean${partitionName}`]: {
+          value: function (opts) {
+            return partitionModel.clean(opts)
+          }
+        }
+      })
+
+      Object.defineProperty(model.prototype, `_${plan.moveMethod}`, {
+        value: function (opts) {
+          return this.constructor[plan.moveMethod].call(this.constructor, this, opts)
+        }
+      })
+    }
+
+    partitionsModels[key] = partitionModel
+  })
+
+  return partitionsModels
 }
 
 function getCollection (model) {
   const collection = model.db._collection(model.collectionName)
 
   if (!collection) {
-    throw new Error(`Collection "${model.collectionName}" was not found (database: ${model.db.dbName}).`)
+    throw new Error(`Collection "${model.collectionName}" was not found (database: ${model.db._name()}).`)
   }
 
   return collection
@@ -1772,10 +1942,6 @@ function getCollectionEdgeName (model) {
     .split('_')
     .map((x) => inflect.pluralize(x))
     .join('_')
-}
-
-function getCollectionTrashedName (model) {
-  return inflect.underscore(inflect.pluralize(model.name)) + '_trashed'
 }
 
 function getCollectionType (model) {
@@ -1894,8 +2060,12 @@ function getMetaTimestampAttributes (model) {
   return [].concat(
     model.createTimestamp || [],
     model.updateTimestamp || [],
-    model._modelTrashed && model.deleteTimestamp || []
+    model.partitionTimestamp || []
   )
+}
+
+function getModelName (model) {
+  return model.name + (model.partitionName || '')
 }
 
 function getModelQueryBuilder (model) {
@@ -1995,10 +2165,10 @@ function getRelationsPlans (model) {
         const targetModel = model.db._models(jointure.to)
 
         if (typeof isOrigin !== 'undefined' || typeof isTarget !== 'undefined') {
-          if (isOrigin && jointure.from !== prevModel.name) {
+          if (isOrigin && jointure.from !== prevModel.modelName) {
             throw new Error(`Relation "${key}" model "${relModelName}" origin (from) isn't "${prevModel.name}" (model: ${prevModel.name})`)
           }
-          if (isTarget && jointure.to !== prevModel.name) {
+          if (isTarget && jointure.to !== prevModel.modelName) {
             throw new Error(`Relation "${key}" model "${relModelName}" target (to) isn't "${prevModel.name}" (model: ${prevModel.name})`)
           }
         } else {
@@ -2009,15 +2179,15 @@ function getRelationsPlans (model) {
         const target = isOrigin ? targetModel : originModel
 
         if (!isOrigin && !isTarget) {
-          throw new Error(`Model "${prevModel.name}" isn't a part of edge model "${relModel.name}"`)
+          throw new Error(`Model "${prevModel.modelName}" isn't a part of edge model "${relModel.name}"`)
         }
 
         if (!originModel) {
-          throw new Error(`Model "${prevModel.name}" reference unknow model "${jointure.from}"`)
+          throw new Error(`Model "${prevModel.modelName}" reference unknow model "${jointure.from}"`)
         }
 
         if (!targetModel) {
-          throw new Error(`Model "${prevModel.name}" reference unknow model "${jointure.to}"`)
+          throw new Error(`Model "${prevModel.modelName}" reference unknow model "${jointure.to}"`)
         }
 
         traverseCursor.push(target.documentName)
