@@ -1546,10 +1546,6 @@ class Model {
       _oldRev: null
     }, true)
 
-    this.constructor.metaTimestamps.forEach((key) => {
-      this[key] = null
-    })
-
     if (this.constructor.defaultDocument) {
       Object.assign(this, this.constructor.defaultDocument)
     }
