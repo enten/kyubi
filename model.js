@@ -1196,7 +1196,7 @@ class Model {
     }
 
     if (typeof partitionModel === 'string') {
-      partitionModel = partitionModel === 'main' ? model.partitionMain : this.partitionsModels[partitionModel]
+      partitionModel = this.partitionsModels[partitionModel]
     }
 
     const model = this
