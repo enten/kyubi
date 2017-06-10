@@ -491,16 +491,6 @@ function MQB (model, opts, excluded) {
       const validPivots = pivots && pivots.map((x, i) => i + ' - ' + x.name).join(', ')
       const qb = target.mqb
 
-      // qb.load = function () {
-      //   let result = this.fetch()
-
-      //   if (result.next) {
-      //     result = result.toArray()
-      //   }
-
-      //   doc[key] = result
-      // }
-
       if (value) {
         qb.configure = function () {
           if (!model.typeEdge) {
