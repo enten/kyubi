@@ -765,10 +765,21 @@ function inflateQuery (api) {
         let relQb
         let relAqb
 
-        const inheritQbOptions = (qb) => qb
-          .cast(qb.opts.cast != null ? qb.opts.cast : opts.cast)
-          .withCount(qb.opts.withCount != null ? qb.opts.withCount : opts.withCount)
-          .withEdges(qb.opts.withEdges != null ? qb.opts.withEdges : opts.withEdges)
+        const inheritQbOptions = (qb) => {
+          if (qb.opts.cast != null || opts.cast != null) {
+            qb = qb.cast(qb.opts.cast != null ? qb.opts.cast : opts.cast)
+          }
+
+          if (qb.opts.withCount != null || opts.withCount != null) {
+            qb = qb.cast(qb.opts.withCount != null ? qb.opts.withCount : opts.withCount)
+          }
+
+          if (qb.opts.withEdges != null || opts.withEdges != null) {
+            qb = qb.cast(qb.opts.withEdges != null ? qb.opts.withEdges : opts.withEdges)
+          }
+
+          return qb
+        }
 
         if (model.typeEdge) {
           const docRef = `${docName}_${key}`
@@ -803,8 +814,9 @@ function inflateQuery (api) {
               .first(unary)
               .distinct(!index && rel.plans.length && nextPlan)
 
-            if (!nextPlan || qbEdge) {
+            if (!nextPlan/* && qbEdge*/) {
               qb = qb.for([docRef, docRefEdge])
+              // qb = inherotQbOptions(qb.for([docRef, docRefEdge]))
             }
 
             if (!nextPlan) {
@@ -816,18 +828,29 @@ function inflateQuery (api) {
               let returnedEdge = AQB.expr(docRefEdge)
 
               if (qbEdge) {
-                returnedEdge = parseOptionReturn(qbEdge.opts, docRefEdge)
+                if (qbEdge.opts.count) {
+                  returnedEdge = AQB.expr(`${docRef} ? 1 : 0`)
+                } else {
+                  returnedEdge = parseOptionReturn(qbEdge.opts, docRefEdge)
+                }
               }
 
               if (qb.opts.return === false) {
                 hidden = true
               }
 
-              if (relQb.opts.withEdges) {
+              if (relQb.opts.withEdges != null ? relQb.opts.withEdges != false : opts.withEdges != null ? opts.withEdges != false : relQb) {
                 qb = qb.return(AQB.expr(`MERGE(${returnedRel.toAQL()}, {_edge: ${returnedEdge.toAQL()}})`))
               } else {
                 qb = qb.return(returnedRel)
               }
+              // if (returnedEdge) {
+              //   qb = qb.return(AQB.expr(`MERGE(${returnedRel.toAQL()}, {_edge: ${returnedEdge.toAQL()}})`))
+              // } else if (relQb.opts.withEdges != null ? relQb.opts.withEdges != false : opts.withEdges) {
+              //   qb = qb.return(returnedRel)
+              // } else {
+              //   qb = qb.return(AQB.expr(`UNSET(${returnedRel.toAQL()}, '_edge')`))
+              // }
             }
 
             // Merge edges filters and sorts
@@ -898,7 +921,7 @@ function inflateQuery (api) {
     const sorts = inflateQuerySorts(api, docName, true)
 
     if (sorts) {
-      query = query.sort.apply(query, sorts)
+      query = isAQBObject(sorts) ? query.sort(sorts) : query.sort.apply(query, sorts)
     }
 
     // LIMIT

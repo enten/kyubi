@@ -22,12 +22,13 @@ const COLLECTION_TYPES = {
 
 const CRUD_OPTIONS_KEYS = [
   'force',
+  'safe',
+
   'keepNull',
   'mergeObjects',
   'overwrite',
   'returnNew',
   'returnOld',
-  'safe',
   'silent',
   'waitForSync'
 ]
@@ -38,12 +39,16 @@ const INTERNAL_ATTRIBUTES = [
   '_rev',
 ]
 
-const SPECIAL_ATTRIBUTES = INTERNAL_ATTRIBUTES.concat([
-  '_oldRev'
-])
+const INTERNAL_EDGE_ATTRIBUTES = [
+  '_from',
+  '_to'
+]
+
+const INTERNAL_EXTENDED_ATTRIBUTES = [
+  '_old'
+]
 
 const INTERNAL_ATTRIBUTES_AQB = AQB(INTERNAL_ATTRIBUTES)
-const SPECIAL_ATTRIBUTES_AQB = AQB(SPECIAL_ATTRIBUTES)
 
 const RELATION_ONE_TO_ONE = 'oneToOne'
 const RELATION_ONE_TO_MANY = 'oneToMany'
@@ -62,6 +67,12 @@ const RELATION_TYPES = {
   'N-N': RELATION_MANY_TO_MANY,
   'n-n': RELATION_MANY_TO_MANY
 }
+
+const SAVE_REL_OPTS = [
+  'attach',
+  'detach',
+  'sync'
+]
 
 class Model {
   /** @final */
@@ -179,8 +190,8 @@ class Model {
   }
 
   /** @final */
-  static get metaSpecials () {
-    return lazyProperty(this, '_metaSpecials', getMetaSpecialAttributes)
+  static get metaInternals () {
+    return lazyProperty(this, '_metaInternals', getMetaInternalAttributes)
   }
 
   /** @final */
@@ -478,7 +489,7 @@ class Model {
   static castQueryResultRelations (data, qb) {
     const {cast, relations} = qb.opts
 
-    if (relations) {
+    if (data && relations) {
       Object.keys(relations).forEach((key) => {
         const relOpts = relations[key].opts
 
@@ -488,8 +499,9 @@ class Model {
             if (values._edge) {
               const relPlans = qb.model.relationsPlans[key]
               const relPivotsLength = relPlans.pivots.length
+              const relPivotOpts = relOpts.edges && relOpts.edges[relPivotsLength - 1] && relOpts.edges[relPivotsLength - 1].opts
 
-              if (!relOpts.edges || !relOpts.edges[relPivotsLength - 1] || relOpts.edges[relPivotsLength - 1].opts.cast != false) {
+              if (!relPivotOpts || (relPivotOpts.cast != false && !relPivotOpts.count && !relPivotOpts.pair && !relPivotOpts.pluck)) {
                 values._edge = new relPlans.pivot(values._edge)
               }
             }
@@ -595,6 +607,10 @@ class Model {
       return selector.map((x) => this.exists(x))
     }
 
+    if (typeof selector === 'object' && !selector._id && !selector._key) {
+      return false
+    }
+
     selector = this.castDocumentSelector(selector)
 
     return this.collection.exists(selector)
@@ -611,14 +627,21 @@ class Model {
       .run()
   }
 
-  static find (selector) {
-    return this.findOr(selector, null)
+  static find (selector, opts) {
+    return this.findOr(selector, null, opts)
   }
 
   static findBy (example, opts) {
     if (typeof example === 'string') {
       example = {[example]: opts}
       opts = arguments[2]
+    }
+
+    if (Array.isArray(example)) {
+      example = _.chunk(example, 2).reduce((acc, [key, value]) => {
+        acc[key] = value
+        return acc
+      }, {})
     }
 
     return this.findByOr(example, null, opts)
@@ -629,6 +652,13 @@ class Model {
       example = {[example]: orValue}
       orValue = opts
       opts = arguments[3]
+    }
+
+    if (Array.isArray(example)) {
+      example = _.chunk(example, 2).reduce((acc, [key, value]) => {
+        acc[key] = value
+        return acc
+      }, {})
     }
 
     let result = this.firstExample(example, opts)
@@ -664,16 +694,14 @@ class Model {
     return this.findByOr(example, (e) => {throw (error || e)}, opts)
   }
 
-  static findOr (selector, orValue) {
+  static findOr (selector, orValue, opts) {
+    let docMeta
     let result
 
-    try {
-      result = this.document(selector)
-    } catch (e) {
-      if (arguments.length < 2 || e.errorNum !== errors.ERROR_ARANGO_DOCUMENT_NOT_FOUND.code) {
-        throw e
-      }
+    docMeta = this.exists(selector)
+    result = docMeta && this.firstExample(docMeta, opts)
 
+    if (!result) {
       result = typeof orValue === 'function' ? orValue(e, selector) : orValue
     }
 
@@ -688,10 +716,11 @@ class Model {
     return this.findOr(selector, (e) => {throw (error || e)})
   }
 
-  static fill (doc, data, dataValue, opts) {
+  static fill (doc, data, dataValue, opts = {}) {
     if (arguments.length > 2) {
       if (typeof data === 'string') {
-        data = {[data]: dataValue}
+        // data = {[data]: dataValue}
+        data = _.set({}, _.toPath(data), dataValue)
       } else {
         opts = dataValue
         dataValue = undefined
@@ -702,16 +731,25 @@ class Model {
       doc = new this(doc)
     }
 
-    data = _.omit(data, this.metaSpecials)
+    data = _.omit(data, this.metaInternals)
 
     this.deserializeTimestamps(data)
 
-    Object.assign(doc, data)
+    // Object.assign(doc, data)
+    if (opts.concatArrays) {
+      _.mergeWith(doc, data, (objValue, srcValue) => {
+        if (_.isArray(objValue)) {
+          return objValue.concat(srcValue);
+        }
+      })
+    } else {
+      _.merge(doc, data)
+    }
 
     return doc
   }
 
-  static fillSpecials (doc, data, dataValue, opts) {
+  static fillInternals (doc, data, dataValue, opts) {
     if (arguments.length > 2) {
       if (typeof data === 'string') {
         data = {[data]: dataValue}
@@ -725,7 +763,7 @@ class Model {
       doc = new this(doc)
     }
 
-    data = _.pick(data, this.metaSpecials)
+    data = _.pick(data, this.metaInternals)
 
     Object.keys(data).forEach((key) => {
       Object.defineProperty(doc, key, {
@@ -755,7 +793,7 @@ class Model {
   }
 
   static forDb (data, opts = {}) {
-    const out = Object.assign({}, data)
+    let out = Object.assign({}, data)
 
     if (opts.newDocument) {
       if (out._key === null) {
@@ -764,7 +802,15 @@ class Model {
     } else {
       const rev = (opts.meta || data)._rev
 
-      Object.assign(out, opts.meta, {_oldRev: rev})
+      Object.assign(out, opts.meta, {_old: rev})
+    }
+
+    if (this.relationsKeys.length) {
+      out = _.omit(out, this.relationsKeys)
+    }
+
+    if (out._edge) {
+      out = _.omit(out, '_edge')
     }
 
     // this.castDocumentSelector(out)
@@ -1240,7 +1286,7 @@ class Model {
       doc = partitionInstance
     } else {
       model.fill(doc, partitionInstance)
-      model.fillSpecials(doc, partitionInstance)
+      model.fillInternals(doc, partitionInstance)
 
       if (model.partition && doc['_' + model.partition]) {
         Object.defineProperty(doc, '_' + model.partition, {
@@ -1319,14 +1365,14 @@ class Model {
       })
     }
 
-    if (meta.old) {
-      Object.defineProperty(doc, 'old', {
-        configurable: true,
-        enumerable: false,
-        value: meta.old,
-        writable: false
-      })
-    }
+    // if (meta.old) {
+    //   Object.defineProperty(doc, 'old', {
+    //     configurable: true,
+    //     enumerable: false,
+    //     value: meta.old,
+    //     writable: false
+    //   })
+    // }
 
     return doc
   }
@@ -1401,15 +1447,186 @@ class Model {
 
     meta = this.collection.save(data, opts)
 
-    this.fillSpecials(doc, meta)
+    this.fillInternals(doc, meta)
 
-    if (meta.new) {
-      Object.defineProperty(doc, 'new', {
-        configurable: true,
-        enumerable: false,
-        value: meta.new,
-        writable: false
-      })
+    // if (meta.new) {
+    //   Object.defineProperty(doc, 'new', {
+    //     configurable: true,
+    //     enumerable: false,
+    //     value: meta.new,
+    //     writable: false
+    //   })
+    // }
+
+    if (opts.with) {
+      doc = _.castArray(opts.with).reduce((acc, relName) => {
+        return this.saveRelation(relName, acc, acc[relName], opts)
+      }, doc)
+    }
+
+    return doc
+  }
+
+  static saveRelation (relName, doc, relDocs, opts = {}) {
+    if (this.typeEdge) {
+      throw new Error(`Saving relation through an edge document isn't supported yet (mode: ${this.name})`)
+    }
+
+    const docMeta = this.exists(doc)
+
+    if (!docMeta) {
+      throw new Error(`Can't save relation "${relName}": document not found (model: ${this.name})`)
+    }
+
+    const relPlans = this.relationsPlans[relName]
+
+    if (!relPlans) {
+      throw new Error(`Can't save relation "${relName}": relation doesn't exists (model: ${this.name})`)
+    }
+
+    if (relPlans.plans.length > 1) {
+      throw new Error(`Can't save relation "${relName}": multiple edges (model: ${this.name})`)
+    }
+
+    if (typeof doc !== 'object') {
+      doc = doc.find(doc)
+    } else if (!doc._modelInstance || opts.mutate == false) {
+      doc = new this(doc)
+    }
+
+    const {pivot, target, unary} = relPlans
+    const {isOrigin, isTarget, jointure} = relPlans.plans[0]
+
+    relDocs = _.castArray(relDocs)
+
+    if (unary && !opts.detach && !relDocs.length) {
+      throw new Error(`Can't save relation "${relName}": null value (model: ${this.name})`)
+    }
+
+    relDocs = relDocs.map((relDoc) => {
+      let relDocMeta
+      let relEdge
+      let relEdgeExample
+
+      if (typeof relDoc !== 'object') {
+        if (opts.detach && unary && !relDoc) {
+          relDoc = getRelationData(this, relName, doc)
+        } else {
+          const docId = relDoc
+
+          relDoc = target.find(docId)
+
+          if (!relDoc) {
+            throw new Error(`Can't save relation "${relName}": document "${docId}" not found (model: ${this.name})`)
+          }
+        }
+      } else if (!relDoc._modelInstance || opts.mutate == false) {
+        relDoc = new target(relDoc)
+      }
+
+      relDocMeta = target.exists(relDoc)
+
+      if (opts.attach && !relDocMeta) {
+        throw new Error(`Can't save relation "${relName}": related document doesn't exists (model: ${this.name})`)
+      }
+
+      if (unary) {
+        relEdgeExample = [
+          isOrigin ? '_from' : '_to',
+          doc._id
+        ]
+      } else if (!unary && relDocMeta) {
+        if (jointure.type === 'manyToMany') {
+          relEdgeExample = [
+            isOrigin ? '_from' : '_to',
+            doc._id,
+            isOrigin ? '_to' : '_from',
+            relDocMeta._id
+          ]
+        } else {
+          relEdgeExample = [
+            isOrigin ? '_to' : '_from',
+            relDocMeta._id
+          ]
+        }
+      }
+
+      if (relEdgeExample) {
+        relEdge = pivot.findBy(relEdgeExample)
+      }
+
+      if (!relEdge) {
+        relEdge = new pivot()
+      }
+
+      if (relDoc._edge) {
+        relEdge
+          ._fill(relDoc._edge)
+          ._fillInternals(relDoc._edge)
+      }
+
+      return [relDoc, relDocMeta, relEdge]
+    }).map(([relDoc, relDocMeta, relEdge], index) => {
+
+      if (!index && opts.sync) {
+        pivot.mqb
+          .filter(isOrigin ? '_from': '_to', AQB(doc._id))
+          .iterate((edge) => edge._remove({force: true}))
+        
+        doc[relName] = []
+      }
+
+      if (opts.detach && !opts.sync && !opts.attach) {
+        if (relEdge._exists()) {
+          relEdge._remove({force: true})
+        }
+
+        if (doc[relName] && relDocMeta) {
+          if (unary) {
+            doc[relName] = null
+          } else if (Array.isArray(doc[relName])) {
+            doc[relName] = doc[relName].filter(({_id}) => {
+              return _id !== relDocMeta._id
+            })
+          }
+        }
+
+        return
+      }
+
+      relEdge._fillInternals(isOrigin ? '_from' : '_to', doc._id)
+
+      // if (!opts.attach) {
+        relDocMeta = _.pick(relDoc._save(), target.metaInternals)
+      // }
+
+      relEdge._fillInternals(isOrigin ? '_to' : '_from', relDocMeta._id)
+
+      relEdge._save()
+
+      if (opts.withEdges != false) {
+        if (opts.mutate == false || !relDoc._edge || !relDoc._edge._modelInstance) {
+          relDoc._edge = relEdge
+        } else {
+          relDoc._edge
+            ._fill(relEdge)
+            ._fillInternals(relEdge)
+        }
+      }
+
+      return relDoc
+    })
+
+    if (!opts.detach) {
+      if (unary) {
+        doc[relName] = relDocs[0]
+      } else if (Array.isArray(doc[relName])) {
+        doc[relName] = doc[relName]
+          .filter(({_id}) => !relDocs.find((relDoc) => _id === relDoc._id))
+          .concat(relDocs)
+      } else {
+        doc[relName] = relDocs
+      }
     }
 
     return doc
@@ -1453,7 +1670,7 @@ class Model {
       doc = opts.replace ? new this(data) : this.document(data)._fill(data)
     }
 
-    this.fillSpecials(doc, meta)
+    this.fillInternals(doc, meta)
 
     const id = doc._key || doc._id
 
@@ -1478,24 +1695,30 @@ class Model {
     }
 
     // this.fill(doc, data)
-    this.fillSpecials(doc, meta)
+    this.fillInternals(doc, meta)
 
-    if (meta.new) {
-      Object.defineProperty(doc, 'new', {
-        configurable: true,
-        enumerable: false,
-        value: meta.new,
-        writable: false
-      })
-    }
+    // if (meta.new) {
+    //   Object.defineProperty(doc, 'new', {
+    //     configurable: true,
+    //     enumerable: false,
+    //     value: meta.new,
+    //     writable: false
+    //   })
+    // }
 
-    if (meta.old) {
-      Object.defineProperty(doc, 'old', {
-        configurable: true,
-        enumerable: false,
-        value: meta.old,
-        writable: false
-      })
+    // if (meta.old) {
+    //   Object.defineProperty(doc, 'old', {
+    //     configurable: true,
+    //     enumerable: false,
+    //     value: meta.old,
+    //     writable: false
+    //   })
+    // }
+
+    if (opts.with) {
+      doc = _.castArray(opts.with).reduce((acc, relName) => {
+        return this.saveRelation(relName, acc, acc[relName], opts)
+      }, doc)
     }
 
     return doc
@@ -1539,11 +1762,12 @@ class Model {
   }
 
   constructor (data) {
-    this.constructor.fillSpecials(this, {
+    this.constructor.fillInternals(this, {
       _id: null,
       _key: null,
       _rev: null,
-      _oldRev: null
+      _from: null,
+      _to: null
     }, true)
 
     if (this.constructor.defaultDocument) {
@@ -1551,13 +1775,17 @@ class Model {
     }
 
     if (data) {
-      this.constructor.fillSpecials(this, data)
+      this.constructor.fillInternals(this, data)
       this.constructor.fill(this, data)
     }
   }
 
   get _collection () {
     return this.constructor.collection
+  }
+
+  get _model () {
+    return this.constructor
   }
 
   get _modelInstance () {
@@ -1569,15 +1797,15 @@ class Model {
   }
 
   _exists () {
-    return this._key || this._id ? this.constructor.exists(this) : false
+    return this.constructor.exists(this)
   }
 
   _fill (...args) {
     return this.constructor.fill.apply(this.constructor, [this].concat(args))
   }
 
-  _fillSpecials (...args) {
-    return this.constructor.fillSpecials.apply(this.constructor, [this].concat(args))
+  _fillInternals (...args) {
+    return this.constructor.fillInternals.apply(this.constructor, [this].concat(args))
   }
 
   _inEdges () {
@@ -1600,19 +1828,19 @@ class Model {
   //   // TODO ???
   // }
 
-  toDataObject (opts) {
-    if (!opts) {
-      const newDocument = !(this._key || this._id)
-      const meta = !newDocument ? _.pick(this, this.constructor.metaSpecials) : undefined
+  // toDataObject (opts) {
+  //   if (!opts) {
+  //     const newDocument = !(this._key || this._id)
+  //     const meta = !newDocument ? _.pick(this, this.constructor.metaInternals) : undefined
 
-      opts = {
-        newDocument,
-        meta
-      }
-    }
+  //     opts = {
+  //       newDocument,
+  //       meta
+  //     }
+  //   }
 
-    return this.constructor.forDb(this, opts)
-  }
+  //   return this.constructor.forDb(this, opts)
+  // }
 
   toJSON () {
     return this.constructor.forClient(this)
@@ -1718,6 +1946,66 @@ function bootstrapModel (model, db) {
     }
   }
 
+  Object.defineProperty(model.prototype, '_rel', {
+    get () {
+      return model.relationsKeys.reduce((acc, relName) => {
+        const {unary} = this.constructor.relationsPlans[relName]
+
+        acc[relName] = SAVE_REL_OPTS.reduce((api, optName) => {
+          api[optName] = (relDocs, opts) => {
+            opts = Object.assign({}, opts, {[optName]: true})
+
+            return api.save(relDocs, opts)
+          }
+
+          return api
+        }, {
+          get: (opts) => {
+            return getRelationData(model, relName, this, opts)
+          },
+          load: (opts) => {
+            return getAndLoadRelationData(model, relName, this, opts)
+          },
+          save: (relDocs, opts) => {
+            return this.constructor.saveRelation(relName, this, relDocs, opts)
+          },
+        })
+
+        return acc
+      }, SAVE_REL_OPTS.reduce((acc, optName) => {
+        acc[optName] = (relDocs, opts) => {
+          opts = Object.assign({}, opts, {[optName]: true})
+
+          return acc.save(relDocs, opts)
+        }
+
+        return acc
+      }, {
+        get: (...args) => {
+          const relDocsOpts = castGetRelationArguments(args)
+
+          return Object.keys(relDocsOpts).reduce((acc, key) => {
+            acc[key] = getRelationData(model, key, this, relDocsOpts[key])
+
+            return acc
+          }, {})
+        },
+        load: (...args) => {
+          const relDocsOpts = castGetRelationArguments(args)
+
+          return Object.keys(relDocsOpts).reduce((doc, key) => {
+            return getAndLoadRelationData(model, key, doc, relDocsOpts[key])
+          }, this)
+        },
+        save: (relDocs, opts) => {
+          return Object.keys(relDocs).reduce((doc, key) => {
+            return doc.constructor.saveRelation(key, doc, relDocs[key], opts)
+          }, this)
+        }
+      }))
+    }
+  })
+
   const partitionsModels = createPartitionsModels(model)
 
   Object.defineProperty(model, '_partitionsModels', {
@@ -1733,6 +2021,39 @@ function bootstrapModel (model, db) {
   })
 
   return model
+}
+
+function castGetRelationArguments (args) {
+  let relDocsOpts
+
+  if (args.length === 1) {
+    relDocsOpts = args[0]
+  } else if (args.length === 2 && _.isPlainObject(args[0]) && _.isPlainObject(args[0])) {
+    relDocsOpts = Object.keys(args[0]).reduce((acc, key) => {
+      acc[key] = Object.assign({}, args[0][key], args[1])
+
+      return acc
+    }, {})
+  } else {
+    relDocsOpts = args
+  }
+
+  if (typeof relDocsOpts === 'string') {
+    relDocsOpts = _.castArray(relDocsOpts)
+  }
+
+  if (Array.isArray(relDocsOpts)) {
+    const relNames = _.flattenDeep(relDocsOpts)
+    const relOpts = relNames.length > 1 && typeof _.last(relNames) === 'object' ? relNames.pop() : true
+
+    relDocsOpts = relNames.reduce((acc, key) => {
+      acc[key] = relOpts
+
+      return acc
+    }, {})
+  }
+
+  return relDocsOpts
 }
 
 function createPartitionsModels (model) {
@@ -2043,13 +2364,17 @@ function getFormatterForServer (model) {
 
 function getMetaAttributes (model) {
   return [].concat(
-    model.metaSpecials || [],
+    model.metaInternals || [],
     model.metaTimestamps || []
   )
 }
 
-function getMetaSpecialAttributes (model) {
-  return [].concat(SPECIAL_ATTRIBUTES)
+function getMetaInternalAttributes (model) {
+  return [].concat(
+    INTERNAL_ATTRIBUTES,
+    INTERNAL_EXTENDED_ATTRIBUTES,
+    model.typeEdge ? INTERNAL_EDGE_ATTRIBUTES : []
+  )
 }
 
 function getMetaTimestampAttributes (model) {
@@ -2074,6 +2399,35 @@ function getModelTimestampAttributes (model) {
     model.metaTimestamps || [],
     model.timestamps || []
   )
+}
+
+function getAndLoadRelationData (model, relName, doc, opts) {
+  const relDocs = getRelationData(model, relName, doc, opts)
+  const {unary} = model.relationsPlans[relName]
+
+  if (!unary && Array.isArray(doc[relName])) {
+    doc[relName] = doc[relName]
+      .filter(({_id}) => !relDocs.find((relDoc) => _id === relDoc._id))
+      .concat(relDocs)
+  } else {
+    doc[relName] = relDocs
+  }
+
+  return doc
+}
+
+function getRelationData (model, relName, doc, opts) {
+  const {unary} = model.relationsPlans[relName]
+  const result = model.mqb
+    .configure({[relName]: opts})
+    .filter('_id', AQB(doc._id))
+    .first()
+    .keep(relName)
+    .fetch()
+  
+  if (result) {
+    return result[relName]
+  }
 }
 
 function getRelationsPlans (model) {
@@ -2109,6 +2463,7 @@ function getRelationsPlans (model) {
         isOrigin,
         isTarget,
         origin,
+        pivot: model,
         target,
         unary: true
       }
@@ -2210,7 +2565,6 @@ function getRelationsPlans (model) {
           pivot: relModel,
           target,
           traverseCursor: [].concat(traverseCursor).join('_'),
-          // unary: jointure.type === RELATION_ONE_TO_ONE || (jointure.type === RELATION_ONE_TO_MANY && prevModel === targetModel)
           unary: jointure.type === RELATION_ONE_TO_ONE || (jointure.type === RELATION_ONE_TO_MANY && isTarget)
         }
 
@@ -2242,7 +2596,7 @@ function getRelationsKeys (model) {
 function getSchema (model) {
   const keys = {}
 
-  model.metaSpecials.forEach((prop) => {
+  model.metaInternals.forEach((prop) => {
     keys[prop] = joi.string()
   })
 
