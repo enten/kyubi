@@ -594,12 +594,10 @@ class Model {
     return this.document(_.castArray(keys))
   }
 
-  // TODO using mqb ????
-  static edges (data) {
-    const result = this.collection.edges(data)
-    const resultCasted = this.castQueryResult(result)
+  static edges (relName, doc) {
+    const {pivot} = this.relationsPlans[relName].plans[0]
 
-    return resultCasted
+    return pivot.edges(doc)
   }
 
   static exists (selector) {
@@ -841,12 +839,10 @@ class Model {
     return this.pluck.apply(this, ['_id'].concat(_.flattenDeep(arguments)))
   }
 
-  // TODO using mqb ????
-  static inEdges (data) {
-    const result = this.collection.inEdges(data)
-    const resultCasted = this.castQueryResult(result)
+  static inEdges (relName, doc) {
+    const {pivot} = this.relationsPlans[relName].plans[0]
 
-    return resultCasted
+    return pivot.inEdges(doc)
   }
 
   static index (id) {
@@ -1169,12 +1165,10 @@ class Model {
       .filter(attr, '>=', left, '&&', attr, '<', right)
   }
 
-  // TODO using mqb ????
-  static outEdges (data) {
-    const result = this.collection.outEdges(data)
-    const resultCasted = this.castQueryResult(result)
+  static outEdges (relName, doc) {
+    const {pivot} = this.relationsPlans[relName].plans[0]
 
-    return resultCasted
+    return pivot.outEdges(doc)
   }
 
   static paginate () {
@@ -1791,9 +1785,8 @@ class Model {
   get _modelInstance () {
     return true
   }
-
-  _edges () {
-    return this.constructor.edges(this)
+  _edges (relName) {
+    return this.constructor.edges(relName, this)
   }
 
   _exists () {
@@ -1808,12 +1801,12 @@ class Model {
     return this.constructor.fillInternals.apply(this.constructor, [this].concat(args))
   }
 
-  _inEdges () {
-    return this.constructor.inEdges(this)
+  _inEdges (relName) {
+    return this.constructor.inEdges(relName, this)
   }
 
-  _outEdges () {
-    return this.constructor.outEdges(this)
+  _outEdges (relName) {
+    return this.constructor.outEdges(relName, this)
   }
 
   _remove (opts) {
@@ -1878,6 +1871,36 @@ class EdgeModel extends Model {
   /** @final */
   static get relations () {
     return lazyProperty(this, '_relations', getEdgeRelations)
+  }
+
+  static edges (id) {
+    if (typeof id === 'object') {
+      id = id._id
+    }
+
+    const result = this.collection.edges(id)
+
+    return this.castQueryResult(result)
+  }
+
+  static inEdges (id) {
+    if (typeof id === 'object') {
+      id = id._id
+    }
+
+    const result = this.collection.inEdges(id)
+
+    return this.castQueryResult(result)
+  }
+
+  static outEdges (id) {
+    if (typeof id === 'object') {
+      id = id._id
+    }
+
+    const result = this.collection.outEdges(id)
+
+    return this.castQueryResult(result)
   }
 }
 
