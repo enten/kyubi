@@ -492,7 +492,6 @@ class Model {
     if (data && relations) {
       Object.keys(relations).forEach((key) => {
         const relOpts = relations[key].opts
-
         if (data[key] && !relOpts.count && !relOpts.pair && !relOpts.pluck && (relOpts.cast ||( cast && relOpts.cast != false))) {
           const {target} = qb.model.relationsPlans[key]
           const inflateRelation = (values) => {
@@ -514,7 +513,9 @@ class Model {
           }
 
           if (Array.isArray(data[key])) {
-            data[key] = data[key].map((x) => inflateRelation(x))
+            data[key] = data[key]
+              .filter((x) => x != null)
+              .map((x) => inflateRelation(x))
           } else {
             data[key] = inflateRelation(data[key])
           }
@@ -833,6 +834,10 @@ class Model {
     // this.deserializeTimestamps(out)
 
     return out
+  }
+
+  static generateKey (doc) {
+    return null
   }
 
   static ids () {
@@ -1420,6 +1425,10 @@ class Model {
 
     if (!doc._modelInstance || opts.mutate == false) {
       doc = new this(doc)
+    }
+
+    if (!doc._key) {
+      this.fillInternals(doc, '_key', this.generateKey(doc))
     }
 
     if (this.createTimestamp && !_.get(doc, this.createTimestamp)) {
