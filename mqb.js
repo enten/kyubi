@@ -812,7 +812,7 @@ function inflateQuery (api) {
             let qb = nextPlan ? target.mqb : opts.relations[key]
             let qbEdge = _.get(opts.relations[key], ['opts', 'edges', index])
 
-            qb = qb
+            qb = inheritQbOptions(qb)
               .for(docRef)
               .in(AQB.expr(`${direction} ${prevDocRef}._id ${pivot.collectionName}`))
               .first(unary)
@@ -820,11 +820,10 @@ function inflateQuery (api) {
 
             if (!nextPlan/* && qbEdge*/) {
               qb = qb.for([docRef, docRefEdge])
-              // qb = inherotQbOptions(qb.for([docRef, docRefEdge]))
             }
 
             if (!nextPlan) {
-              relQb = inheritQbOptions(qb)
+              relQb = qb
             }
             
             if (!nextPlan && !qb.opts.count && !qb.opts.pair && !qb.opts.pluck) {
@@ -843,7 +842,7 @@ function inflateQuery (api) {
                 hidden = true
               }
 
-              if (relQb.opts.withEdges != null ? relQb.opts.withEdges != false : opts.withEdges != null ? opts.withEdges != false : relQb) {
+              if (qb.opts.withEdges) {
                 qb = qb.return(AQB.expr(`MERGE(${returnedRel.toAQL()}, {_edge: ${returnedEdge.toAQL()}})`))
               } else {
                 qb = qb.return(returnedRel)
