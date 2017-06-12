@@ -595,12 +595,22 @@ class Model {
     return this.document(_.castArray(keys))
   }
 
-  static edges (doc, relName) {
-    return _.uniq((relName ? _.castArray(relName) : this.relationsKeys)
-      .reduce((acc, relName) => {
-        const {pivot} = this.relationsPlans[relName].plans[0]
+  static edges (doc, relName, opts = {}) {
+    const pivotsUsed = []
 
-        return acc.concat(pivot.edges(doc))
+    return _.uniq((relName ? _.castArray(relName) : this.relationsKeys)
+      .reduce((acc, relName, index, arr) => {
+        const {plans} = this.relationsPlans[relName]
+
+        if (plans.length === 1 && pivotsUsed.indexOf(plans[0].pivot) === -1) {
+          const {pivot} = plans[0]
+
+          pivotsUsed.push(pivot)
+
+          acc = acc.concat(pivot.edges(doc, opts))
+        }
+
+        return acc
       }, []))
   }
 
@@ -847,13 +857,15 @@ class Model {
     return this.pluck.apply(this, ['_id'].concat(_.flattenDeep(arguments)))
   }
 
-  static inEdges (doc, relName) {
-    return _.uniq((relName ? _.castArray(relName) : this.relationsKeys)
-      .reduce((acc, relName) => {
-        const {pivot} = this.relationsPlans[relName].plans[0]
+  static inEdges (doc, relName, opts) {
+    if (typeof relName === 'object' && !Array.isArray(relName)) {
+      opts = relName
+      relName = undefined
+    }
 
-        return acc.concat(pivot.inEdges(doc))
-      }, []))
+    opts = Object.assign({}, opts, {inEdges: true, outEdges: false})
+
+    return this.edges(doc, relName, opts)
   }
 
   static index (id) {
@@ -1176,13 +1188,15 @@ class Model {
       .filter(attr, '>=', left, '&&', attr, '<', right)
   }
 
-  static outEdges (doc, relName) {
-    return _.uniq((relName ? _.castArray(relName) : this.relationsKeys)
-      .reduce((acc, relName) => {
-        const {pivot} = this.relationsPlans[relName].plans[0]
+  static outEdges (doc, relName, opts) {
+    if (typeof relName === 'object' && !Array.isArray(relName)) {
+      opts = relName
+      relName = undefined
+    }
 
-        return acc.concat(pivot.outEdges(doc))
-      }, []))
+    opts = Object.assign({}, opts, {inEdges: false, outEdges: true})
+
+    return this.edges(doc, relName, opts)
   }
 
   static paginate () {
@@ -1265,8 +1279,16 @@ class Model {
       throw new Error(`Cannot move document without _key or _id (from ${model.partition || 'main'} into ${partitionKey}`)
     }
 
+    if (partitionModel.partition === (model.partition || 'main')) {
+      return doc
+    }
+
     if (opts.mutate == false) {
       doc = new partitionModel(doc)
+    }
+
+    if (model.recoverTimestamp) {
+      _.set(doc, model.recoverTimestamp, null)
     }
 
     if (model.partitionTimestamp) {
@@ -1289,6 +1311,23 @@ class Model {
     partitionInstance = partitionModel.create(doc, opts)
 
     meta = model.collection.remove(id, opts)
+
+    Object.keys(model.partitionsModels).forEach((key) => {
+      ;[
+        ['_from', model.partitionsModels[key].outEdges(doc)],
+        ['_to', model.partitionsModels[key].inEdges(doc)]
+      ].forEach(([edgeKey, edges]) => {
+        edges.forEach((edge) => {
+          edge._fillInternals(edgeKey, partitionInstance._id)
+
+          if (key === (model.partition || 'main')) {
+            edge._moveInto(partitionModel.partition, opts)
+          } else {
+            edge._save(opts)
+          }
+        })
+      })
+    })
 
     if (opts.mutate == false) {
       doc = partitionInstance
@@ -1328,7 +1367,7 @@ class Model {
   }
 
   static remove (doc, opts = {}) {
-    if (opts.safe != false && !opts.force && this.partitionTrashed) {
+    if (opts.safe != false && !opts.force && this.partitionTrashed && this.partition !== this.partitionTrashed.partition) {
       return this.moveInto(this.partitionTrashed, doc, opts)
     }
 
@@ -1363,6 +1402,17 @@ class Model {
     let meta
 
     meta = this.collection.remove(id, opts)
+
+    Object.keys(this.partitionsModels).forEach((key) => {
+      ;[
+        ['_from', this.partitionsModels[key].outEdges(doc)],
+        ['_to', this.partitionsModels[key].inEdges(doc)]
+      ].forEach(([edgeKey, edges]) => {
+        edges.forEach((edge) => {
+          edge._remove(Object.assign({}, opts, {force: true}))
+        })
+      })
+    })
 
     if (this.partitionTrashed && !doc['_' + this.partitionTrashed]) {
       Object.defineProperty(doc, '_' + this.partitionTrashed, {
@@ -1836,6 +1886,10 @@ class Model {
     return this.constructor.inEdges(this, relName)
   }
 
+  _moveInto (partitionModel, opts) {
+    return this.constructor.moveInto(partitionModel, this, opts)
+  }
+
   _outEdges (relName) {
     return this.constructor.outEdges(this, relName)
   }
@@ -1904,34 +1958,38 @@ class EdgeModel extends Model {
     return lazyProperty(this, '_relations', getEdgeRelations)
   }
 
-  static edges (id) {
+  static edges (id, opts = {}) {
     if (typeof id === 'object') {
       id = id._id
     }
 
-    const result = this.collection.edges(id)
+    let result
 
-    return this.castQueryResult(result)
+    if (opts.inEdges) {
+      result = this.collection.inEdges(id)
+    } else if (opts.outEdges) {
+      result = this.collection.outEdges(id)
+    } else {
+      result = this.collection.edges(id)
+    }
+
+    if (opts.cast != false) {
+      result = this.castQueryResult(result)
+    }
+
+    return result
   }
 
-  static inEdges (id) {
-    if (typeof id === 'object') {
-      id = id._id
-    }
+  static inEdges (id, opts) {
+    opts = Object.assign({}, opts, {inEdges: true, outEdges: false})
 
-    const result = this.collection.inEdges(id)
-
-    return this.castQueryResult(result)
+    return this.edges(id, opts)
   }
 
-  static outEdges (id) {
-    if (typeof id === 'object') {
-      id = id._id
-    }
+  static outEdges (id, opts) {
+    opts = Object.assign({}, opts, {inEdges: true, outEdges: false})
 
-    const result = this.collection.outEdges(id)
-
-    return this.castQueryResult(result)
+    return this.edges(id, opts)
   }
 }
 
@@ -2142,7 +2200,7 @@ function createPartitionsModels (model) {
     const plan = partitionsPlans[key]
 
     if (!plan.collectionName) {
-      plan.collectionName = [model.collectionName, key].join('_')
+      plan.collectionName = `${model.collectionName}_${key}`
     }
 
     if (!plan.timestampKey) {
