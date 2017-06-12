@@ -595,10 +595,13 @@ class Model {
     return this.document(_.castArray(keys))
   }
 
-  static edges (relName, doc) {
-    const {pivot} = this.relationsPlans[relName].plans[0]
+  static edges (doc, relName) {
+    return _.uniq((relName ? _.castArray(relName) : this.relationsKeys)
+      .reduce((acc, relName) => {
+        const {pivot} = this.relationsPlans[relName].plans[0]
 
-    return pivot.edges(doc)
+        return acc.concat(pivot.edges(doc))
+      }, []))
   }
 
   static exists (selector) {
@@ -844,10 +847,13 @@ class Model {
     return this.pluck.apply(this, ['_id'].concat(_.flattenDeep(arguments)))
   }
 
-  static inEdges (relName, doc) {
-    const {pivot} = this.relationsPlans[relName].plans[0]
+  static inEdges (doc, relName) {
+    return _.uniq((relName ? _.castArray(relName) : this.relationsKeys)
+      .reduce((acc, relName) => {
+        const {pivot} = this.relationsPlans[relName].plans[0]
 
-    return pivot.inEdges(doc)
+        return acc.concat(pivot.inEdges(doc))
+      }, []))
   }
 
   static index (id) {
@@ -1170,10 +1176,13 @@ class Model {
       .filter(attr, '>=', left, '&&', attr, '<', right)
   }
 
-  static outEdges (relName, doc) {
-    const {pivot} = this.relationsPlans[relName].plans[0]
+  static outEdges (doc, relName) {
+    return _.uniq((relName ? _.castArray(relName) : this.relationsKeys)
+      .reduce((acc, relName) => {
+        const {pivot} = this.relationsPlans[relName].plans[0]
 
-    return pivot.outEdges(doc)
+        return acc.concat(pivot.outEdges(doc))
+      }, []))
   }
 
   static paginate () {
@@ -1806,8 +1815,9 @@ class Model {
   get _modelInstance () {
     return true
   }
+
   _edges (relName) {
-    return this.constructor.edges(relName, this)
+    return this.constructor.edges(this, relName)
   }
 
   _exists () {
@@ -1823,11 +1833,11 @@ class Model {
   }
 
   _inEdges (relName) {
-    return this.constructor.inEdges(relName, this)
+    return this.constructor.inEdges(this, relName)
   }
 
   _outEdges (relName) {
-    return this.constructor.outEdges(relName, this)
+    return this.constructor.outEdges(this, relName)
   }
 
   _remove (opts) {
