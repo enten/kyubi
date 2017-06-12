@@ -633,7 +633,7 @@ function forkApi (model, parentApi, newOpts) {
   Object.defineProperty(api, 'model', {
     configurable: true,
     enumerable: false,
-    value: model,
+    value: model || parentApi.model,
     writable: false
   })
 
@@ -719,19 +719,33 @@ function inflateQuery (api) {
     // Populate relations
 
     if (opts.with) {
-      _.flattenDeep(opts.with).forEach((value) => {
-        value.split('.').reduce((acc, key) => {
-          if (!acc.opts.relations) {
-            acc.opts.relations = {}
-          }
+      _.castArray(
+        Array.isArray(opts.with) && opts.with.length === 1
+          ? opts.with[0]
+          : opts.with
+      )
+      .map((value) => Array.isArray(value) ? value.join('.') : value)
+      .filter((value, index, arr) => arr.indexOf(value) === index)
+      .forEach((value) => {
+        value.split('.').reduce((acc, key, index, arr) => {
+          acc = setApiValue(acc, 'relations', Object.assign({}, acc.relations, {
+            [key]: forkApi(null, acc.model.relationsPlans[key].target.mqb)
+          }))
 
-          if (!acc.opts.relations[key]) {
-            acc.opts.relations[key] = acc.model.relationsPlans[key].target.mqb
-          }
+          _.set(
+            api,
+            arr
+              .slice(0, index)
+              .concat(key)
+              .reduce((path, x) => path.concat('opts', 'relations', x), []),
+            acc.opts.relations[key]
+          )
 
           return acc.opts.relations[key]
         }, api)
       })
+
+      api.opts.with = null
     }
 
     const hasRelations = _.flattenDeep([].concat(opts.has, opts.hasNot))
@@ -761,11 +775,11 @@ function inflateQuery (api) {
           }
 
           if (qb.opts.withCount != null || opts.withCount != null) {
-            qb = qb.cast(qb.opts.withCount != null ? qb.opts.withCount : opts.withCount)
+            qb = qb.withCount(qb.opts.withCount != null ? qb.opts.withCount : opts.withCount)
           }
 
           if (qb.opts.withEdges != null || opts.withEdges != null) {
-            qb = qb.cast(qb.opts.withEdges != null ? qb.opts.withEdges : opts.withEdges)
+            qb = qb.withEdges(qb.opts.withEdges != null ? qb.opts.withEdges : opts.withEdges)
           }
 
           return qb
