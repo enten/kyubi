@@ -953,6 +953,114 @@ class Model {
     return this.lastExample.apply(this, arguments)
   }
 
+  static moveInto (partitionModel, doc, opts = {}) {
+    if (Array.isArray(doc)) {
+      return doc.map((x) => this.moveInto(partitionModel, x, opts))
+    }
+
+    if (typeof partitionModel === 'string') {
+      partitionModel = this.partitionsModels[partitionModel]
+    }
+
+    const model = this
+
+    if (typeof doc === 'number' || !doc._modelInstance) {
+      doc = model.document(doc)
+    }
+
+    const id = doc._key || doc._id
+
+    if (!id) {
+      throw new Error(`Cannot move document without _key or _id (from ${model.partition || 'main'} into ${partitionKey}`)
+    }
+
+    if (partitionModel.partition === (model.partition || 'main')) {
+      return doc
+    }
+
+    if (opts.mutate == false) {
+      doc = new partitionModel(doc)
+    }
+
+    if (model.recoverTimestamp) {
+      _.set(doc, model.recoverTimestamp, null)
+    }
+
+    if (model.partitionTimestamp) {
+      _.set(doc, model.partitionTimestamp, null)
+    }
+
+    const now = Date.now()
+
+    if (partitionModel.partitionTimestamp) {
+      _.set(doc, partitionModel.partitionTimestamp, new Date(now))
+    }
+
+    if (model.updateTimestamp) {
+      _.set(doc, model.updateTimestamp, new Date(now))
+    }
+
+    let partitionInstance
+    let meta
+
+    partitionInstance = partitionModel.create(doc, opts)
+
+    meta = model.collection.remove(id, opts)
+
+    Object.keys(model.partitionsModels).forEach((key) => {
+      ;[
+        ['_from', model.partitionsModels[key].outEdges(doc)],
+        ['_to', model.partitionsModels[key].inEdges(doc)]
+      ].forEach(([edgeKey, edges]) => {
+        edges.forEach((edge) => {
+          edge._fillInternals(edgeKey, partitionInstance._id)
+
+          if (key === (model.partition || 'main')) {
+            edge._moveInto(partitionModel.partition, opts)
+          } else {
+            edge._save(opts)
+          }
+        })
+      })
+    })
+
+    if (opts.mutate == false) {
+      doc = partitionInstance
+    } else {
+      model.fill(doc, partitionInstance)
+      model.fillInternals(doc, partitionInstance)
+
+      if (model.partition && doc['_' + model.partition]) {
+        Object.defineProperty(doc, '_' + model.partition, {
+          configurable: true,
+          enumerable: false,
+          value: false,
+          writable: false
+        })
+      }
+
+      if (partitionModel.partition && !doc['_' + partitionModel.partition]) {
+        Object.defineProperty(doc, '_' + partitionModel.partition, {
+          configurable: true,
+          enumerable: false,
+          value: true,
+          writable: false
+        })
+      }
+    }
+
+    if (meta.new) {
+      Object.defineProperty(doc, 'new', {
+        configurable: true,
+        enumerable: false,
+        value: meta.new,
+        writable: false
+      })
+    }
+
+    return doc
+  }
+
   static mqbAll () {
     const opts = this.castDocumentSelectorByExample(arguments)
     let query = this.mqb(opts, [
@@ -1256,114 +1364,6 @@ class Model {
   static range () {
     return this.mqbRange.apply(this, arguments)
       .fetch()
-  }
-
-  static moveInto (partitionModel, doc, opts = {}) {
-    if (Array.isArray(doc)) {
-      return doc.map((x) => this.moveInto(partitionModel, x, opts))
-    }
-
-    if (typeof partitionModel === 'string') {
-      partitionModel = this.partitionsModels[partitionModel]
-    }
-
-    const model = this
-
-    if (typeof doc === 'number' || !doc._modelInstance) {
-      doc = model.document(doc)
-    }
-
-    const id = doc._key || doc._id
-
-    if (!id) {
-      throw new Error(`Cannot move document without _key or _id (from ${model.partition || 'main'} into ${partitionKey}`)
-    }
-
-    if (partitionModel.partition === (model.partition || 'main')) {
-      return doc
-    }
-
-    if (opts.mutate == false) {
-      doc = new partitionModel(doc)
-    }
-
-    if (model.recoverTimestamp) {
-      _.set(doc, model.recoverTimestamp, null)
-    }
-
-    if (model.partitionTimestamp) {
-      _.set(doc, model.partitionTimestamp, null)
-    }
-
-    const now = Date.now()
-
-    if (partitionModel.partitionTimestamp) {
-      _.set(doc, partitionModel.partitionTimestamp, new Date(now))
-    }
-
-    if (model.updateTimestamp) {
-      _.set(doc, model.updateTimestamp, new Date(now))
-    }
-
-    let partitionInstance
-    let meta
-
-    partitionInstance = partitionModel.create(doc, opts)
-
-    meta = model.collection.remove(id, opts)
-
-    Object.keys(model.partitionsModels).forEach((key) => {
-      ;[
-        ['_from', model.partitionsModels[key].outEdges(doc)],
-        ['_to', model.partitionsModels[key].inEdges(doc)]
-      ].forEach(([edgeKey, edges]) => {
-        edges.forEach((edge) => {
-          edge._fillInternals(edgeKey, partitionInstance._id)
-
-          if (key === (model.partition || 'main')) {
-            edge._moveInto(partitionModel.partition, opts)
-          } else {
-            edge._save(opts)
-          }
-        })
-      })
-    })
-
-    if (opts.mutate == false) {
-      doc = partitionInstance
-    } else {
-      model.fill(doc, partitionInstance)
-      model.fillInternals(doc, partitionInstance)
-
-      if (model.partition && doc['_' + model.partition]) {
-        Object.defineProperty(doc, '_' + model.partition, {
-          configurable: true,
-          enumerable: false,
-          value: false,
-          writable: false
-        })
-      }
-
-      if (partitionModel.partition && !doc['_' + partitionModel.partition]) {
-        Object.defineProperty(doc, '_' + partitionModel.partition, {
-          configurable: true,
-          enumerable: false,
-          value: true,
-          writable: false
-        })
-      }
-    }
-
-    if (meta.new) {
-      Object.defineProperty(doc, 'new', {
-        configurable: true,
-        enumerable: false,
-        value: meta.new,
-        writable: false
-      })
-    }
-
-    return doc
   }
 
   static remove (doc, opts = {}) {
