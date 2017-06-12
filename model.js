@@ -1461,6 +1461,12 @@ class Model {
     //   })
     // }
 
+    if (opts.withRelations) {
+      opts = Object.assign({}, opts, {
+        with: this.relationsKeys.filter((relName) => doc[relName])
+      })
+    }
+
     if (opts.with) {
       doc = _.castArray(opts.with).reduce((acc, relName) => {
         return this.saveRelation(relName, acc, acc[relName], opts)
@@ -1717,6 +1723,12 @@ class Model {
     //     writable: false
     //   })
     // }
+
+    if (opts.withRelations) {
+      opts = Object.assign({}, opts, {
+        with: this.relationsKeys.filter((relName) => doc[relName])
+      })
+    }
 
     if (opts.with) {
       doc = _.castArray(opts.with).reduce((acc, relName) => {
