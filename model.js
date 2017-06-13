@@ -175,6 +175,11 @@ class Model {
   }
 
   /** @overridable */
+  static get geoIndex () {
+    return null
+  }
+
+  /** @overridable */
   static get hidden () {
     return null
   }
@@ -2056,6 +2061,25 @@ function bootstrapModel (model, db) {
     if (!RELATION_TYPES[jointure.type]) {
       throw new Error(`Edge Model "${model.name}" static get "join" returns an invalid object: join type "${jointure.type}" is unknown (valid types: "${RELATION_ONE_TO_ONE}","${RELATION_ONE_TO_MANY}" or "${RELATION_MANY_TO_MANY}")`)
     }
+  }
+
+  if (model.geoIndex) {
+    ;[
+      'near',
+      'within',
+      'withinRectangle'
+    ].forEach((key) => {
+      Object.defineProperty(model, key, {
+        value: (...args) => {
+          const opts = Object.assign({},
+            typeof _.last(args) === 'object' && args.pop(),
+            {[key]: args}
+          )
+
+          return model.mqb.configure(opts).fetch()
+        }
+      })
+    })
   }
 
   Object.defineProperty(model.prototype, '_rel', {

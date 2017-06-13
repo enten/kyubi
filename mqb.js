@@ -457,7 +457,19 @@ const API_SETTERS = {
   }
 }
 
+const API_GEO_SETTERS = [
+  ['near', 'NEAR'],
+  ['within', 'WITHIN'],
+  ['withinRectangle', 'WITHIN_RECTANGLE']
+].reduce((api, [key, method]) => {
+  api[key] = function (...args) {
+    return setApiValue(this, 'geo', isFalsyArgs(args) ? null : {method, args})
+  }
+  return api
+}, {})
+
 const API_SETTERS_KEYS = Object.keys(API_SETTERS)
+const API_GEO_SETTERS_KEYS = Object.keys(API_GEO_SETTERS)
 
 const API_PROTO = Object.assign({}, API_MIXINS, API_SETTERS)
 
@@ -481,6 +493,10 @@ function MQB (model, opts, excluded) {
         return model.queryScopes[key].apply(this, [].concat(this, args))
       }
     })
+  }
+
+  if (model.geoIndex) {
+    Object.assign(api, API_GEO_SETTERS)
   }
 
   model.relationsKeys.forEach((key) => {
@@ -647,6 +663,10 @@ function getApiSetterKeys (api) {
     setterKeys = setterKeys.concat(Object.keys(api.model.queryScopes))
   }
 
+  if (api.model.geoIndex) {
+    setterKeys = setterKeys.concat(API_GEO_SETTERS_KEYS)
+  }
+
   if (api.model.relations) {
     setterKeys = setterKeys.concat(Object.keys(api.model.relations))
   }
@@ -690,6 +710,10 @@ function inflateQuery (api) {
   let query
 
   // FOR
+
+  if (opts.geo) {
+    opts.in = AQB.expr(`${opts.geo.method}(${[model.collectionName].concat(opts.geo.args).join(', ')})`)
+  }
 
   query = new ForExpression2(null, opts.for || docName, opts.in || model.collectionName)
 
