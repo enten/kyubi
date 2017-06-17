@@ -105,6 +105,11 @@ class Model {
     return true
   }
 
+  /** @final */
+  static get bootstrapped () {
+    return false
+  }
+
   /** @overridable */
   static get allowUnknown () {
     return true
@@ -127,21 +132,22 @@ class Model {
 
   /** @final */
   static get collection () {
-    return lazyProperty(this, '_collection', getCollection)
+    throw new Error(`Model "${this.name}" isn't bootstrapped yet`)
   }
 
   /** @overridable */
   static get collectionName () {
-    return lazyProperty(this, '_collectionName', getCollectionName)
+    throw new Error(`Model "${this.name}" isn't bootstrapped yet`)
   }
 
   /** @final */
   static get db () {
-    if (!this._db) {
-      throw new Error(`Model "${this.name}" isn't bootstrapped yet`)
-    }
+    throw new Error(`Model "${this.name}" isn't bootstrapped yet`)
+  }
 
-    return this._db
+  /** @overridable */
+  static get design () {
+    return null
   }
 
   /** @overridable */
@@ -175,18 +181,23 @@ class Model {
   }
 
   /** @overridable */
-  static get geoIndex () {
-    return null
-  }
-
-  /** @overridable */
   static get hidden () {
     return null
   }
 
   /** @final */
   static get indexes () {
-    return this.collection.getIndexes()
+    throw new Error(`Model "${this.name}" isn't bootstrapped yet`)
+  }
+
+  /** @final */
+  static get indexesKeys () {
+    return lazyProperty(this, '_indexesKeys', getModelIndexesKeys)
+  }
+
+  /** @overridable */
+  static get join () {
+    return null
   }
 
   /** @final */
@@ -251,7 +262,7 @@ class Model {
 
   /** @final */
   static get partitionsModels () {
-    return this._partitionsModels
+    throw new Error(`Model "${this.name}" isn't bootstrapped yet`)
   }
 
   /** @overridable */
@@ -285,13 +296,13 @@ class Model {
   }
 
   /** @final */
-  static get sortBy () {
-    return this.createTimestamp || '_key'
+  static get schema () {
+    return lazyProperty(this, '_schema', getValidationSchema)
   }
 
   /** @final */
-  static get schema () {
-    return lazyProperty(this, '_schema', getSchema)
+  static get sortBy () {
+    return this.createTimestamp || '_key'
   }
 
   /** @overridable */
@@ -987,11 +998,11 @@ class Model {
       doc = new partitionModel(doc)
     }
 
-    if (model.recoverTimestamp) {
+    if (model.recoverTimestamp && _.has(doc, model.recoverTimestamp)) {
       _.set(doc, model.recoverTimestamp, null)
     }
 
-    if (model.partitionTimestamp) {
+    if (model.partitionTimestamp && _.has(doc, model.partitionTimestamp)) {
       _.set(doc, model.partitionTimestamp, null)
     }
 
@@ -1054,14 +1065,14 @@ class Model {
       }
     }
 
-    if (meta.new) {
-      Object.defineProperty(doc, 'new', {
-        configurable: true,
-        enumerable: false,
-        value: meta.new,
-        writable: false
-      })
-    }
+    // if (meta.new) {
+    //   Object.defineProperty(doc, 'new', {
+    //     configurable: true,
+    //     enumerable: false,
+    //     value: meta.new,
+    //     writable: false
+    //   })
+    // }
 
     return doc
   }
@@ -1948,17 +1959,6 @@ class Model {
 }
 
 class EdgeModel extends Model {
-  /** @overridable */
-  static get collectionName () {
-    return lazyProperty(this, '_collectionName', getCollectionEdgeName)
-  }
-
-  /** @overridable required */
-  static get join () {
-    return null
-  }
-
-  /** @final */
   static get relations () {
     return lazyProperty(this, '_relations', getEdgeRelations)
   }
@@ -1999,7 +1999,7 @@ class EdgeModel extends Model {
 }
 
 function bootstrapModel (model, db) {
-  if (model.hasOwnProperty('_db')) {
+  if (model.bootstrapped) {
     throw new Error(`Model "${model.name}" is already bootstrapped`)
   }
 
@@ -2012,19 +2012,52 @@ function bootstrapModel (model, db) {
     })
   }
 
-  Object.defineProperty(model, '_db', {
-    configurable: true,
-    enumerable: false,
-    value: db,
-    writable: true
-  })
+  const design = getModelSchema(model)
+  const collection = db._collection(design.name)
 
-  if (!db._collection(model.collectionName)) {
+  if (!collection) {
     throw new ArangoError({
       errorNum: errors.ERROR_ARANGO_COLLECTION_NOT_FOUND.code,
-      errorMessage: `${errors.ERROR_ARANGO_COLLECTION_NOT_FOUND.message} (${model.collectionName})`
+      errorMessage: `${errors.ERROR_ARANGO_COLLECTION_NOT_FOUND.message} "${design.name}" (model: ${model.name})`
     })
   }
+
+  Object.defineProperties(model, {
+    'bootstrapped': {
+      configurable: true,
+      enumerable: false,
+      value: true,
+      writable: false
+    },
+    'collection': {
+      configurable: true,
+      enumerable: false,
+      value: collection,
+      writable: false
+    },
+    'collectionName': {
+      configurable: true,
+      enumerable: false,
+      value: design.name,
+      writable: false
+    },
+    'db': {
+      configurable: true,
+      enumerable: false,
+      value: db,
+      writable: true
+    },
+    'design': {
+      configurable: true,
+      enumerable: false,
+      value: design,
+      writable: false
+    }
+  })
+
+  bootstrapModelIndexes(model)
+  bootstrapModelRelations(model)
+  bootstrapModelPartitions(model)
 
   Object.defineProperty(db._models, model.name, {
     configurable: true,
@@ -2033,12 +2066,123 @@ function bootstrapModel (model, db) {
     writable: true
   })
 
+  return model
+}
+
+function bootstrapModelIndexes (model) {
+  const colIndexes = model.collection.getIndexes()
+  const indexes = {}
+
+  Object.keys(model.design.indexes).forEach((indexKey) => {
+    const index = model.design.indexes[indexKey]
+    const indexFound = colIndexes.find((colIndex) => {
+      if (colIndex.type !== index.type && (index.type !== 'geo' || colIndex.type !== 'geo2')) {
+        return false
+      }
+
+      if (_.difference(index.fields, colIndex.fields).length) {
+        return false
+      }
+
+      return Object.keys(index)
+        .filter((key) => key !== 'fields' && key !== 'type')
+        .reduce((acc, key) => acc && index[key] === colIndex[key], true)
+    })
+
+    if (!indexFound) {
+      throw new Error(`Index type ${index.type} named "${indexKey}" doesn't exists ${JSON.stringify(index)} (model: ${model.name})`)
+    }
+
+    indexes[indexKey] = indexFound
+
+    if (~['fulltext', 'geo'].indexOf(index.type)) {
+      if (!model[index.type]) {
+        Object.defineProperty(model, index.type, {
+          value: (indexName) => {
+            if (!model[index.type][indexName]) {
+              throw new Error(`Index ${index.type} named "${indexName}" doesn't exists (model: ${model.name}) `)
+            }
+
+            return model[index.type][indexName]
+          }
+        })
+      }
+
+      model[index.type][indexKey] = (
+        index.type === 'geo'
+          ? ['near', 'within', 'withinRectangle']
+          : ['byText']
+      ).reduce((acc, indexMethod) => {
+        const mqbMethod = `mqb${_.upperFirst(indexMethod)}`
+        const getQb = (args) => {
+          const opts = Object.assign({},
+            typeof _.last(args) === 'object' && args.pop(),
+            {[indexMethod]: [indexKey].concat(args)}
+          )
+
+          return model.mqb.configure(opts)
+        }
+
+        acc[mqbMethod] = (...args) => {
+          return getQb(args)
+        }
+
+        acc[indexMethod] = (...args) => {
+          return getQb(args).fetch()
+        }
+
+        if (!model.hasOwnProperty(mqbMethod)) {
+          Object.defineProperty(model, mqbMethod, {
+            value: acc[mqbMethod]
+          })
+        }
+
+        if (!model.hasOwnProperty(indexMethod)) {
+          Object.defineProperty(model, indexMethod, {
+            value: acc[indexMethod]
+          })
+        }
+
+        return acc
+      }, {})
+    }
+  })
+
+  Object.defineProperty(model, 'indexes', {
+    configurable: true,
+    enumerable: false,
+    value: indexes,
+    writable: false
+  })
+
+  return model
+}
+
+function bootstrapModelPartitions (model) {
+  const partitionsModels = createPartitionsModels(model)
+
+  Object.defineProperty(model, 'partitionsModels', {
+    value: partitionsModels
+  })
+
+  Object.keys(partitionsModels).forEach((key) => {
+    const partitionModel = partitionsModels[key]
+
+    Object.defineProperty(db._models, partitionModel.modelName, {
+      value: partitionModel
+    })
+  })
+
+  return model
+}
+
+function bootstrapModelRelations (model) {
   if ((model.typeEdge || model.join) && !EdgeModel.isInheritedModel(model)) {
     throw new Error(`Model "${model.name}" doesn't extend EdgeModel class`)
   }
 
   if (!model.typeEdge && EdgeModel.isInheritedModel(model)) {
-    throw new Error(`Collection "${model.collectionName} isn't an edge collection (model: ${model.name})"`)
+    throw new Error(`Collection "${design.name} isn't an edge collection (model: ${model.name})"`)
   }
 
   if (model.typeEdge) {
@@ -2061,25 +2205,6 @@ function bootstrapModel (model, db) {
     if (!RELATION_TYPES[jointure.type]) {
       throw new Error(`Edge Model "${model.name}" static get "join" returns an invalid object: join type "${jointure.type}" is unknown (valid types: "${RELATION_ONE_TO_ONE}","${RELATION_ONE_TO_MANY}" or "${RELATION_MANY_TO_MANY}")`)
     }
-  }
-
-  if (model.geoIndex) {
-    ;[
-      'near',
-      'within',
-      'withinRectangle'
-    ].forEach((key) => {
-      Object.defineProperty(model, key, {
-        value: (...args) => {
-          const opts = Object.assign({},
-            typeof _.last(args) === 'object' && args.pop(),
-            {[key]: args}
-          )
-
-          return model.mqb.configure(opts).fetch()
-        }
-      })
-    })
   }
 
   Object.defineProperty(model.prototype, '_rel', {
@@ -2140,20 +2265,6 @@ function bootstrapModel (model, db) {
         }
       }))
     }
-  })
-
-  const partitionsModels = createPartitionsModels(model)
-
-  Object.defineProperty(model, '_partitionsModels', {
-    value: partitionsModels
-  })
-
-  Object.keys(partitionsModels).forEach((key) => {
-    const partitionModel = partitionsModels[key]
-
-    Object.defineProperty(db._models, partitionModel.modelName, {
-      value: partitionModel
-    })
   })
 
   return model
@@ -2227,6 +2338,15 @@ function createPartitionsModels (model) {
       plan.collectionName = `${model.collectionName}_${key}`
     }
 
+    const collection = model.db._collection(plan.collectionName)
+
+    if (!collection) {
+      throw new ArangoError({
+        errorNum: errors.ERROR_ARANGO_COLLECTION_NOT_FOUND.code,
+        errorMessage: `partition ${errors.ERROR_ARANGO_COLLECTION_NOT_FOUND.message} "${plan.collectionName}" (model: ${model.name})`
+      })
+    }
+
     if (!plan.timestampKey) {
       plan.timestampKey = key + 'At'
     }
@@ -2265,6 +2385,10 @@ function createPartitionsModels (model) {
     }
 
     const partitionModel = class PartitionModel extends model {
+      static get collection () {
+        return collection
+      }
+
       static get collectionName () {
         return plan.collectionName
       }
@@ -2374,27 +2498,6 @@ function createPartitionsModels (model) {
   })
 
   return partitionsModels
-}
-
-function getCollection (model) {
-  const collection = model.db._collection(model.collectionName)
-
-  if (!collection) {
-    throw new Error(`Collection "${model.collectionName}" was not found (database: ${model.db._name()}).`)
-  }
-
-  return collection
-}
-
-function getCollectionName (model) {
-  return inflect.underscore(inflect.pluralize(model.name))
-}
-
-function getCollectionEdgeName (model) {
-  return inflect.underscore(model.name)
-    .split('_')
-    .map((x) => inflect.pluralize(x))
-    .join('_')
 }
 
 function getCollectionType (model) {
@@ -2522,12 +2625,60 @@ function getMetaTimestampAttributes (model) {
   )
 }
 
+function getModelIndexesKeys (model) {
+  return Object.keys(model.indexes).reduce((acc, key) => {
+    let {type} = model.indexes[key]
+
+    if (type === 'geo2') {
+      type = 'geo'
+    }
+
+    acc[type] = [].concat(acc[type] || [], key)
+
+    return acc
+  }, {})
+}
+
 function getModelName (model) {
   return model.name + (model.partitionName || '')
 }
 
 function getModelQueryBuilder (model) {
   return new MQB(model)
+}
+
+function getModelSchema (model) {
+  const design = Object.assign(
+    {
+      name: null,
+      type: null,
+      indexes: null
+    },
+    model.design
+  )
+
+  design.type = EdgeModel.isInheritedModel(model) ? EDGE_COLLECTION_TYPE : DOCUMENT_COLLECTION_TYPE
+
+  if (!design.name) {
+    if (design.type === EDGE_COLLECTION_TYPE) {
+      design.name = inflect.underscore(model.name)
+        .split('_')
+        .map((x) => inflect.pluralize(x))
+        .join('_')
+    } else {
+      design.name = inflect.underscore(inflect.pluralize(model.name))
+    }
+  }
+
+  design.indexes = _.cloneDeep(design.indexes || {})
+
+  Object.keys(design.indexes).forEach((key) => {
+    if (!Array.isArray(design.indexes[key].fields)) {
+      design.indexes[key].fields = _.castArray(design.indexes[key].fields)
+    }
+  })
+
+  return design
 }
 
 function getModelTimestampAttributes (model) {
@@ -2729,7 +2880,7 @@ function getRelationsKeys (model) {
   return _.isPlainObject(model.relations) ? Object.keys(model.relations) : []
 }
 
-function getSchema (model) {
+function getValidationSchema (model) {
   const keys = {}
 
   model.metaInternals.forEach((prop) => {

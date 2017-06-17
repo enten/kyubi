@@ -457,19 +457,51 @@ const API_SETTERS = {
   }
 }
 
-const API_GEO_SETTERS = [
-  ['near', 'NEAR'],
-  ['within', 'WITHIN'],
-  ['withinRectangle', 'WITHIN_RECTANGLE']
-].reduce((api, [key, method]) => {
-  api[key] = function (...args) {
-    return setApiValue(this, 'geo', isFalsyArgs(args) ? null : {method, args})
-  }
-  return api
+const API_SETTERS_KEYS = Object.keys(API_SETTERS)
+
+const API_FULLTEXT_METHODS = {
+  byText: 'FULLTEXT'
+}
+
+const API_GEO_METHODS = {
+  near: 'NEAR',
+  within: 'WITHIN',
+  withinRectangle: 'WITHIN_RECTANGLE'
+}
+
+const API_INDEXES_SETTERS = [
+  ['fulltext', API_FULLTEXT_METHODS],
+  ['geo', API_GEO_METHODS]
+].reduce((acc, [indexType, methods]) => {
+  acc[indexType] = Object.keys(methods).reduce((api, key) => {
+    api[key] = function (...args) {
+      let indexKey
+
+      if (~this.model.indexesKeys[indexType].indexOf(args[0])) {
+        indexKey = args.shift()
+      } else {
+        indexKey = this.model.indexesKeys[indexType][0]
+      }
+
+      return setApiValue(this, 'indexFilter', isFalsyArgs(args) ? null : {
+        key: indexKey,
+        type: indexType,
+        method: methods[key],
+        args
+      })
+    }
+
+    return api
+  }, {})
+
+  return acc
 }, {})
 
-const API_SETTERS_KEYS = Object.keys(API_SETTERS)
-const API_GEO_SETTERS_KEYS = Object.keys(API_GEO_SETTERS)
+const API_INDEXES_SETTERS_KEYS = Object.keys(API_INDEXES_SETTERS).reduce((acc, key) => {
+  acc[key] = Object.keys(API_INDEXES_SETTERS[key])
+
+  return acc
+}, {})
 
 const API_PROTO = Object.assign({}, API_MIXINS, API_SETTERS)
 
@@ -495,8 +527,12 @@ function MQB (model, opts, excluded) {
     })
   }
 
-  if (model.geoIndex) {
-    Object.assign(api, API_GEO_SETTERS)
+  if (model.fulltext) {
+    Object.assign(api, API_INDEXES_SETTERS.fulltext)
+  }
+
+  if (model.geo) {
+    Object.assign(api, API_INDEXES_SETTERS.geo)
   }
 
   model.relationsKeys.forEach((key) => {
@@ -663,8 +699,12 @@ function getApiSetterKeys (api) {
     setterKeys = setterKeys.concat(Object.keys(api.model.queryScopes))
   }
 
-  if (api.model.geoIndex) {
-    setterKeys = setterKeys.concat(API_GEO_SETTERS_KEYS)
+  if (api.model.fulltext) {
+    setterKeys = setterKeys.concat(API_INDEXES_SETTERS_KEYS.fulltext)
+  }
+
+  if (api.model.geo) {
+    setterKeys = setterKeys.concat(API_INDEXES_SETTERS_KEYS.geo)
   }
 
   if (api.model.relations) {
@@ -711,8 +751,18 @@ function inflateQuery (api) {
 
   // FOR
 
-  if (opts.geo) {
-    opts.in = AQB.expr(`${opts.geo.method}(${[model.collectionName].concat(opts.geo.args).join(', ')})`)
+  if (opts.indexFilter) {
+    let indexFilter
+
+    if (opts.indexFilter.type === 'geo') {
+      indexFilter = (coll) => `${opts.indexFilter.method}(${[coll].concat(opts.indexFilter.args.map((x) => JSON.stringify(x))).join(', ')})`
+    } else {
+      const index = model.indexes[opts.indexFilter.key]
+
+      indexFilter = (coll) => `${opts.indexFilter.method}(${[].concat(coll, [].concat(index.fields[0], opts.indexFilter.args).map((x) => JSON.stringify(x))).join(', ')})`
+    }
+    
+    opts.in = AQB.expr(indexFilter(opts.in || model.collectionName))
   }
 
   query = new ForExpression2(null, opts.for || docName, opts.in || model.collectionName)
