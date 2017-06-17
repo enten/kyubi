@@ -74,6 +74,16 @@ const SAVE_REL_OPTS = [
   'sync'
 ]
 
+const GEO_METHODS = [
+  'near',
+  'within',
+  'withinRectangle'
+]
+
+const FULLTEXT_METHODS = [
+  'byText'
+]
+
 class Model {
   /** @final */
   static get Document () {
@@ -2110,8 +2120,8 @@ function bootstrapModelIndexes (model) {
 
       model[index.type][indexKey] = (
         index.type === 'geo'
-          ? ['near', 'within', 'withinRectangle']
-          : ['byText']
+          ? GEO_METHODS
+          : FULLTEXT_METHODS
       ).reduce((acc, indexMethod) => {
         const mqbMethod = `mqb${_.upperFirst(indexMethod)}`
         const getQb = (args) => {
