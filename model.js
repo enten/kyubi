@@ -989,10 +989,10 @@ class Model {
     const id = doc._key || doc._id
 
     if (!id) {
-      throw new Error(`Cannot move document without _key or _id (from ${model.partition || 'main'} into ${partitionKey}`)
+      throw new Error(`Cannot move document without _key or _id (from ${model.partition} into ${partitionKey}`)
     }
 
-    if (partitionModel.partition === (model.partition || 'main')) {
+    if (partitionModel.partition === model.partition) {
       return doc
     }
 
@@ -1033,7 +1033,7 @@ class Model {
         edges.forEach((edge) => {
           edge._fillInternals(edgeKey, partitionInstance._id)
 
-          if (key === (model.partition || 'main')) {
+          if (key === model.partition) {
             edge._moveInto(partitionModel.partition, opts)
           } else {
             edge._save(opts)
@@ -2177,11 +2177,13 @@ function bootstrapModelPartitions (model) {
   })
 
   Object.keys(partitionsModels).forEach((key) => {
-    const partitionModel = partitionsModels[key]
+    if (key !== 'main') {
+      const partitionModel = partitionsModels[key]
 
-    Object.defineProperty(db._models, partitionModel.modelName, {
-      value: partitionModel
-    })
+      Object.defineProperty(db._models, partitionModel.modelName, {
+        value: partitionModel
+      })
+    }
   })
 
   return model
@@ -2395,7 +2397,7 @@ function createPartitionsModels (model) {
       plan.join.to += partitionName
     }
 
-    const partitionModel = class PartitionModel extends model {
+    const partitionModel = key === 'main' ? model : class PartitionModel extends model {
       static get collection () {
         return collection
       }
@@ -2441,21 +2443,39 @@ function createPartitionsModels (model) {
         value: partitionModel
       },
       [`_${key}`]: {
-        get: () => false
+        get: function () {
+          return this.partition === key
+        }
       }
     })
 
     Object.defineProperty(model.prototype, `_${key}`, {
-      get: () => false
+      get: function () {
+        return this.partition === key
+      }
     })
 
-    Object.defineProperty(partitionModel, `_${key}`, {
-      get: () => true
-    })
+    if (key === 'main') {
+      Object.defineProperties(model, {
+        'partition': {
+          value: key
+        },
+        'partitionName': {
+          value: partitionName
+        },
+        'partitionTimestamp': {
+          value: plan.timestampKey
+        }
+      })
+    } else {
+      Object.defineProperty(partitionModel, `_${key}`, {
+        value: true
+      })
 
-    Object.defineProperty(partitionModel.prototype, `_${key}`, {
-      get: () => true
-    })
+      Object.defineProperty(partitionModel.prototype, `_${key}`, {
+        value: true
+      })
+    }
 
     if (plan.moveMethod) {
       Object.defineProperties(model, {
@@ -2651,7 +2671,7 @@ function getModelIndexesKeys (model) {
 }
 
 function getModelName (model) {
-  return model.name + (model.partitionName || '')
+  return model.name + (model.partition !== 'main' ? model.partitionName : '')
 }
 
 function getModelQueryBuilder (model) {
