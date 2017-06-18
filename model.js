@@ -12,6 +12,8 @@ const {
   printObject
 } = require('@arangodb')
 
+const __DEV__ = _.get(module, 'context.isDevelopment')
+
 const DOCUMENT_COLLECTION_TYPE = 2
 const EDGE_COLLECTION_TYPE = 3
 
@@ -521,13 +523,27 @@ class Model {
         if (data[key] && !relOpts.count && !relOpts.pair && !relOpts.pluck && (relOpts.cast ||( cast && relOpts.cast != false))) {
           const {target} = qb.model.relationsPlans[key]
           const inflateRelation = (values) => {
+            let targetPartition = target
+
+            if (values._id) {
+              const valueCollName = values._id.split('/')[0]
+
+              if (valueCollName !== target.collectionName) {
+                const valuePartitionName = Object.keys(target.partitionsModels).find((key) => target.partitionsModels[key].collectionName === valueCollName)
+
+                if (valuePartitionName && target.partitionsModels[valuePartitionName]) {
+                  targetPartition = target.partitionsModels[valuePartitionName]
+                }
+              }
+            }
+
             if (values._edge) {
               const relPlans = qb.model.relationsPlans[key]
               const relPivotsLength = relPlans.pivots.length
               const relPivotOpts = relOpts.edges && relOpts.edges[relPivotsLength - 1] && relOpts.edges[relPivotsLength - 1].opts
 
               if (!relPivotOpts || (relPivotOpts.cast != false && !relPivotOpts.count && !relPivotOpts.pair && !relPivotOpts.pluck)) {
-                values._edge = new relPlans.pivot(values._edge)
+                values._edge = new relPlans.pivot.partitionsModels[targetPartition.partition](values._edge)
               }
             }
 
@@ -535,7 +551,7 @@ class Model {
               values = this.castQueryResultRelations(values, relations[key])
             }
 
-            return new target(values)
+            return new targetPartition(values)
           }
 
           if (Array.isArray(data[key])) {
@@ -977,7 +993,12 @@ class Model {
     }
 
     if (typeof partitionModel === 'string') {
+      if (!this.partitionsModels[partitionModel]) {
+        throw new Error(`Partition "${partitionModel}" doesn't exists (model ${this.name})`)
+      }
+
       partitionModel = this.partitionsModels[partitionModel]
+
     }
 
     const model = this
@@ -1753,6 +1774,75 @@ class Model {
     return out
   }
 
+  static setup (db, opts) {
+    if (_.isPlainObject(db)) {
+      opts = db
+      db = undefined
+    }
+
+    if (!db) {
+      db = this.db
+    }
+
+    const partitionsPlans = getModelPartitionsPlans(this)
+
+    Object.keys(partitionsPlans).forEach((partitionKey) => {
+      const {design} = partitionsPlans[partitionKey]
+      const creationMethod = `_create${design.type === EDGE_COLLECTION_TYPE ? 'Edge' : 'Document'}Collection`
+
+      console.debug(`Ensure ${COLLECTION_TYPES[design.type]} collection "${design.name}" exists`)
+
+      if (!db._collection(design.name)) {
+        console.debug(`Create collection "${design.name}".`)
+
+        db[creationMethod].call(db, design.name)
+      }
+
+      const collection = db._collection(design.name)
+
+      Object.keys(design.indexes).forEach((key) => {
+        const index = design.indexes[key]
+
+        console.debug(`Ensure index "${key}" exists in collection "${design.name}": ${JSON.stringify(index)}`)
+
+        collection.ensureIndex(index)
+      })
+    })
+
+    return this
+  }
+
+  static teardown (db, opts) {
+    if (_.isPlainObject(db)) {
+      opts = db
+      db = undefined
+    }
+
+    if (!db) {
+      db = this.db
+    }
+
+    const {force, onlyInDevMode} = opts || {}
+
+    if (force || (onlyInDevMode != false && __DEV__)) {
+      const partitionsPlans = getModelPartitionsPlans(this)
+
+      Object.keys(partitionsPlans).forEach((partitionKey) => {
+        const {design} = partitionsPlans[partitionKey]
+
+        console.debug(`Ensure ${COLLECTION_TYPES[design.type]} collection "${design.name}" doesn't exists`)
+
+        if (db._collection(design.name)) {
+          console.debug(`Drop collection "${design.name}"`)
+
+          db._drop(design.name)
+        }
+      })
+    }
+
+    return this
+  }
+
   static update (doc, opts = {}) {
     if (Array.isArray(doc)) {
       return doc.map((x) => this.update(x, opts))
@@ -1859,7 +1949,7 @@ class Model {
   }
 
   static _PRINT (context) {
-    context.output += `[Model "${this.modelName}" (collection: ${this.collectionName})]`
+    context.output += `[Model "${this.modelName}" (${this.boostrapped ? ['collection:', this.collectionName].join(' ') : 'not boostraped'})]`
   }
 
   constructor (data) {
@@ -2318,83 +2408,17 @@ function castGetRelationArguments (args) {
 
 function createPartitionsModels (model) {
   const partitionsModels = {}
-  const partitionsPlans = {}
-
-  partitionsPlans.main = {
-    collectionName: model.collectionName,
-    moveMethod: 'recover',
-    timestampKey: model.recoverTimestamp
-  }
-
-  if (model.partitionArchived) {
-    partitionsPlans[model.partitionArchived] = {
-      moveMethod: 'archive',
-      timestampKey: model.archiveTimestamp
-    }
-  }
-
-  if (model.partitionTrashed) {
-    model.partitionTrashed
-    partitionsPlans[model.partitionTrashed] = {
-      moveMethod: 'softRemove',
-      timestampKey: model.deleteTimestamp
-    }
-  }
-
-  Object.assign(partitionsPlans, model.partitions)
+  const partitionsPlans = getModelPartitionsPlans(model)
 
   Object.keys(partitionsPlans).forEach((key) => {
-    const partitionName = _.upperFirst(key)
     const plan = partitionsPlans[key]
-
-    if (!plan.collectionName) {
-      plan.collectionName = `${model.collectionName}_${key}`
-    }
-
     const collection = model.db._collection(plan.collectionName)
-
+    
     if (!collection) {
       throw new ArangoError({
         errorNum: errors.ERROR_ARANGO_COLLECTION_NOT_FOUND.code,
         errorMessage: `partition ${errors.ERROR_ARANGO_COLLECTION_NOT_FOUND.message} "${plan.collectionName}" (model: ${model.name})`
       })
-    }
-
-    if (!plan.timestampKey) {
-      plan.timestampKey = key + 'At'
-    }
-
-    plan.relations = model.relations
-    plan.join = model.join
-
-    if (plan.relations) {
-      plan.relations = Object.assign({}, plan.relations)
-
-      Object.keys(plan.relations).forEach((relName) => {
-        plan.relations[relName] = _.flattenDeep(_.castArray(plan.relations[relName]))
-          .reduce((acc, x) => acc.concat(x.split('~')), [])
-          .map((x) => {
-            x = x.trim()
-
-            const dotPos = x.indexOf('.')
-
-            if (~dotPos) {
-              x = x.substring(0, dotPos) + partitionName + x.substring(dotPos)
-            } else {
-              x = x + partitionName
-            }
-
-            return x
-          })
-          .join(' ~ ')
-        })
-    }
-
-    if (plan.join) {
-      plan.join = Object.assign({}, plan.join)
-
-      plan.join.from += partitionName
-      plan.join.to += partitionName
     }
 
     const partitionModel = key === 'main' ? model : class PartitionModel extends model {
@@ -2410,6 +2434,10 @@ function createPartitionsModels (model) {
         return model.db
       }
 
+      static get design () {
+        return plan.design
+      }
+
       static get name () {
         return model.name
       }
@@ -2423,7 +2451,7 @@ function createPartitionsModels (model) {
       }
 
       static get partitionName () {
-        return partitionName
+        return plan.name
       }
 
       static get partitionTimestamp () {
@@ -2437,9 +2465,6 @@ function createPartitionsModels (model) {
 
     Object.defineProperties(model, {
       [key]: {
-        value: partitionModel
-      },
-      [`partition${partitionName}`]: {
         value: partitionModel
       },
       [`_${key}`]: {
@@ -2461,7 +2486,7 @@ function createPartitionsModels (model) {
           value: key
         },
         'partitionName': {
-          value: partitionName
+          value: plan.name
         },
         'partitionTimestamp': {
           value: plan.timestampKey
@@ -2511,7 +2536,7 @@ function createPartitionsModels (model) {
             return this[plan.moveMethod].call(this, doc, _.pick(opts, CRUD_OPTIONS_KEYS))
           }
         },
-        [`clean${partitionName}`]: {
+        [`clean${plan.name}`]: {
           value: function (opts) {
             return partitionModel.clean(opts)
           }
@@ -2671,7 +2696,91 @@ function getModelIndexesKeys (model) {
 }
 
 function getModelName (model) {
-  return model.name + (model.partition !== 'main' ? model.partitionName : '')
+  return model.name + (model.partition && model.partition !== 'main' ? model.partitionName : '')
+}
+
+function getModelPartitionsPlans (model) {
+  const partitionsPlans = {}
+  const design = getModelSchema(model)
+
+  partitionsPlans.main = {
+    collectionName: design.name,
+    moveMethod: 'recover',
+    timestampKey: model.recoverTimestamp
+  }
+
+  if (model.partitionArchived) {
+    partitionsPlans[model.partitionArchived] = {
+      moveMethod: 'archive',
+      timestampKey: model.archiveTimestamp
+    }
+  }
+
+  if (model.partitionTrashed) {
+    model.partitionTrashed
+    partitionsPlans[model.partitionTrashed] = {
+      moveMethod: 'softRemove',
+      timestampKey: model.deleteTimestamp
+    }
+  }
+
+  Object.assign(partitionsPlans, model.partitions)
+
+  Object.keys(partitionsPlans).forEach((key) => {
+    const partitionName = _.upperFirst(key)
+    const plan = Object.assign({name: null, collectionName: null}, partitionsPlans[key])
+
+    plan.name = partitionName
+
+    if (key === 'main') {
+      plan.collectionName = design.name
+    } else if (!plan.collectionName) {
+      plan.collectionName = `${design.name}_${key}`
+    }
+
+    plan.design = Object.assign({}, design, {name: plan.collectionName})
+
+    if (!plan.timestampKey) {
+      plan.timestampKey = key + 'At'
+    }
+
+    plan.relations = model.relations
+    plan.join = model.join
+
+    if (plan.relations) {
+      plan.relations = Object.assign({}, plan.relations)
+
+      Object.keys(plan.relations).forEach((relName) => {
+        plan.relations[relName] = _.flattenDeep(_.castArray(plan.relations[relName]))
+          .reduce((acc, x) => acc.concat(x.split('~')), [])
+          .map((x) => {
+            x = x.trim()
+
+            const dotPos = x.indexOf('.')
+
+            if (~dotPos) {
+              x = x.substring(0, dotPos) + partitionName + x.substring(dotPos)
+            } else {
+              x = x + partitionName
+            }
+
+            return x
+          })
+          .join(' ~ ')
+        })
+    }
+
+    if (plan.join) {
+      plan.join = Object.assign({}, plan.join)
+
+      plan.join.from += partitionName
+      plan.join.to += partitionName
+    }
+
+    partitionsPlans[key] = plan
+  })
+
+  return partitionsPlans
 }
 
 function getModelQueryBuilder (model) {
