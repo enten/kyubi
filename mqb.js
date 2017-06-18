@@ -263,7 +263,6 @@ const API_MIXINS = {
       return cursor.hasNext() ? cursor.next() : null
     }
 
-
     return cursor
   },
   toAQB () {
@@ -690,6 +689,22 @@ function MQB (model, opts, excluded) {
   return api
 }
 
+function computeProperty (compute, docName) {
+  let result
+
+  if (typeof compute === 'function') {
+    compute = compute({
+      attr: (attrKey) => `${docName}.${attrKey}`
+    })
+  }
+
+  if (compute) {
+    result = isAQBObject(compute) ? compute : AQB.expr(compute)
+  }
+
+  return result
+}
+
 function createApi (parentApi, newOpts) {
   const api = function (opts, excluded) {
     return api.configure(opts, excluded)
@@ -828,11 +843,21 @@ function inflateQuery (api) {
       .collectWithCountInto(resultVarName)
       .return(resultVarName)
   } else {
-    const currentDocPrefix = docName
-    const currentDocPrefixLength = currentDocPrefix.length
     let merged = {}
 
     // Populate relations
+
+    if (!opts.pair && !opts.pluck && model.computed) {
+      Object.keys(model.computed).forEach((key) => {
+        if (!opts.keep || ~opts.keep.indexOf(key)) {
+          const computedValue = computeProperty(model.computed[key], docName)
+
+          if (computedValue) {
+            merged[key] = computedValue
+          }
+        }
+      })
+    }
 
     if (opts.with) {
       _.castArray(
@@ -943,14 +968,14 @@ function inflateQuery (api) {
             }
             
             if (!nextPlan && !qb.opts.count && !qb.opts.pair && !qb.opts.pluck) {
-              const returnedRel = parseOptionReturn(qb.opts, docRef)
+              const returnedRel = parseOptionReturn(qb.opts, docRef, model.computed)
               let returnedEdge = AQB.expr(docRefEdge)
 
               if (qbEdge) {
                 if (qbEdge.opts.count) {
                   returnedEdge = AQB.expr(`${docRef} ? 1 : 0`)
                 } else {
-                  returnedEdge = parseOptionReturn(qbEdge.opts, docRefEdge)
+                  returnedEdge = parseOptionReturn(qbEdge.opts, docRefEdge, model.computed)
                 }
               }
 
@@ -1054,7 +1079,7 @@ function inflateQuery (api) {
     // RETURN
 
     if (opts.return != false) {
-      let returned = parseOptionReturn(opts, docName, merged)
+      let returned = parseOptionReturn(opts, docName, model.computed, merged)
 
       if (opts.distinct) {
         query = query.returnDistinct(returned)
@@ -1083,11 +1108,11 @@ function inflateQueryFilters (api, docName) {
   }
 
   if (opts.filter) {
-    filters = [].concat(filters || [], parseOptionFilter(opts.filter, docName))
+    filters = [].concat(filters || [], parseOptionFilter(opts.filter, docName, model.computed))
   }
 
   if (opts.notFilter) {
-    filters = [].concat(filters || [], parseOptionFilter(opts.notFilter, docName, true))
+    filters = [].concat(filters || [], parseOptionFilter(opts.notFilter, docName, model.computed, true))
   }
 
   return filters
@@ -1101,13 +1126,13 @@ function inflateQuerySorts (api, docName, withDefault) {
     return AQB.RAND()
   }
 
-  let sort = parseOptionSort(opts.sort, docName)
+  let sort = parseOptionSort(opts.sort, docName, model.computed)
 
   if (!sort.length && withDefault != false) {
-    sort = parseOptionSort(model.sortBy || DEFAULT.SORT_ATTRIBUTE, docName)
+    sort = parseOptionSort(model.sortBy || DEFAULT.SORT_ATTRIBUTE, docName, model.computed)
 
     sort = sort.map(([sortAttr, sortDirection]) => {
-      return [sortAttr, sortDirection]
+      return [AQB.expr(sortAttr), sortDirection]
     })
   }
 
@@ -1118,7 +1143,10 @@ function inflateQuerySorts (api, docName, withDefault) {
   }
 
   if (sort.length) {
-    return _.flatten(sort)
+    return _.flatten(sort.map(([attr, direction]) => [
+      isAQBObject(attr) ? attr : AQB.expr(attr),
+      direction
+    ]))
   }
 }
 
@@ -1182,7 +1210,12 @@ function parseOptionExample (example) {
   return exampleFilters
 }
 
-function parseOptionFilter (args, docName, isNot) {
+function parseOptionFilter (args, docName, computed, isNot) {
+  if (typeof computed === 'boolean') {
+    isNot = computed
+    computed = undefined
+  }
+
   const filters = []
 
   if (!Array.isArray(args)) {
@@ -1201,7 +1234,7 @@ function parseOptionFilter (args, docName, isNot) {
         fn = () => raw[0]
       }
     } else if (raw.length) {
-      const filter = parseOptionFilterRaw(raw, docName, isNot)
+      const filter = parseOptionFilterRaw(raw, docName, computed, isNot)
 
       if (filter) {
         fn = () => filter
@@ -1216,7 +1249,12 @@ function parseOptionFilter (args, docName, isNot) {
   return filters
 }
 
-function parseOptionFilterRaw (raw, docName, isNot) {
+function parseOptionFilterRaw (raw, docName, computed, isNot) {
+  if (typeof computed === 'boolean') {
+    isNot = computed
+    computed = undefined
+  }
+
   raw = [].concat(raw)
 
   let filter
@@ -1228,7 +1266,7 @@ function parseOptionFilterRaw (raw, docName, isNot) {
     left = raw.shift()
 
     if (Array.isArray(left)) {
-      comparison = parseOptionFilterRaw(left, docName, isNot)
+      comparison = parseOptionFilterRaw(left, docName, computed, isNot)
     } else {
       if (isAQBComparatorName(raw[0])) {
         comparator = raw.shift()
@@ -1253,8 +1291,12 @@ function parseOptionFilterRaw (raw, docName, isNot) {
       right = String(right)
     }
 
-    if (docName && typeof left === 'string' && !left.startsWith(docName)) {
-      left = [docName, left].join('.')
+    if (docName && typeof left === 'string') {
+      if (computed && computed[left]) {
+        left = computeProperty(computed[left], docName)
+      } else if (!left.startsWith(docName)) {
+        left = [docName, left].join('.')
+      }
     }
 
     if (isNot) {
@@ -1375,23 +1417,36 @@ function parseOptionHasRaw (raw, docName, model, isNot) {
   return filter
 }
 
-function parseOptionKeep (keep, docName) {
+function parseOptionKeep (keep, docName, computed) {
   keep = _.compact(_.flattenDeep(_.castArray(keep)))
 
   if (keep.length === 1 && isAQBObject(keep[0])) {
     keep = keep[0]
   } else {
-    keep = keep.map((attr) => {
+    keep = keep.reduce((acc, attr) => {
       if (isAQBObject(attr)) {
         attr = attr.toAQL()
       }
-      if (typeof attr === 'string' && attr.startsWith(docName)) {
-        return attr.substring(attr.indexOf('.') + 1)
-      }
-      return attr
-    })
 
-    keep = _.uniq(keep)
+      if (typeof attr === 'string') {
+        if (attr.startsWith(docName)) {
+          attr = attr.substring(attr.indexOf('.') + 1)
+        }
+
+        if (!computed || !computed[attr]) {
+          return acc.concat(attr)
+        }
+      }
+
+      return acc
+    }, [])
+
+    keep = _.uniq([].concat(
+      '_id',
+      '_key',
+      '_rev',
+      keep
+    ))
 
     keep = keep.length ? AQB(keep) : undefined
   }
@@ -1399,43 +1454,53 @@ function parseOptionKeep (keep, docName) {
   return keep
 }
 
-function parseOptionPair (pair, docName) {
+function parseOptionPair (pair, docName, computed) {
   return pair.map((attr) => {
     if (isAQBObject(attr)) {
       attr = attr.toAQL()
     }
-    if (typeof attr === 'string' && !attr.startsWith(docName)) {
-      return [docName, attr].join('.')
+
+    if (typeof attr === 'string') {
+      if (computed && computed[attr]) {
+        return computeProperty(computed[attr], docName).toAQL()
+      } else if (!attr.startsWith(docName)) {
+        return [docName, attr].join('.')
+      }
     }
+
     return attr
   })
 }
 
-function parseOptionPluck (pluck, docName) {
+function parseOptionPluck (pluck, docName, computed) {
   if (isAQBObject(pluck)) {
     pluck = pluck.toAQL()
   }
 
-  if (typeof pluck === 'string' && !pluck.startsWith(docName)) {
-    pluck = [docName, pluck].join('.')
+  if (typeof pluck === 'string') {
+    if (computed && computed[pluck]) {
+      pluck = computeProperty(computed[pluck], docName).toAQL()
+    } else if (!pluck.startsWith(docName)) {
+      pluck = [docName, pluck].join('.')
+    }
   }
 
   return pluck
 }
 
-function parseOptionReturn (opts, docName, merged = {}) {
+function parseOptionReturn (opts, docName, computed, merged = {}) {
   let returned = docName
 
   if (opts.pair) {
-    const pair = parseOptionPair(opts.pair, docName)
+    const pair = parseOptionPair(opts.pair, docName, computed)
 
     returned = AQB.expr(`{[${pair[0]}]: ${pair[1]}}`)
   } else if (opts.pluck) {
-    const pluck = parseOptionPluck(opts.pluck, docName)
+    const pluck = parseOptionPluck(opts.pluck, docName, computed)
 
-    returned = AQB.ref(pluck)
+    returned = AQB.expr(pluck)
   } else if (opts.keep) {
-    const keep = parseOptionKeep(opts.keep, docName)
+    const keep = parseOptionKeep(opts.keep, docName, computed)
 
     if (keep) {
       returned = AQB.KEEP(docName, keep)
@@ -1457,7 +1522,7 @@ function parseOptionReturn (opts, docName, merged = {}) {
   return returned
 }
 
-function parseOptionSort (args, docName) {
+function parseOptionSort (args, docName, computed) {
   args = _.flattenDeep(_.castArray(args)).reduce((acc, value) => {
     if (typeof value === 'string') {
       return acc.concat(value.split(' '))
@@ -1494,8 +1559,12 @@ function parseOptionSort (args, docName) {
       }
     }
 
-    if (docName && typeof attr === 'string' && !attr.startsWith(docName)) {
-      attr = [docName, attr].join('.')
+    if (docName && typeof attr === 'string') {
+      if (computed && computed[attr]) {
+        attr = computeProperty(computed[attr], docName).toAQL()
+      } else if (!attr.startsWith(docName)) {
+        attr = [docName, attr].join('.')
+      }
     }
 
     sort[attr] = direction || DEFAULT.SORT_ORDER

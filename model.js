@@ -2627,31 +2627,8 @@ function getFormatterForClient (model) {
 }
 
 function getFormatterForServer (model) {
-  const computed = [].concat(model.computed || [])
-  const computing = {}
-
-  computed.forEach((key) => {
-    const desc = Object.getOwnPropertyDescriptor(model.prototype, key)
-
-    if (desc && desc.get) {
-      computing[key] = desc.get
-      return
-    }
-
-    // if (desc && typeof desc.value === 'function') {
-    //   computing[key] = desc.value
-    //   return
-    // }
-
-    throw new Error(`Computing method "${key}" is missing (model: ${model.name})`)
-  })
-
   return (obj) => {
     let out = Object.assign({}, obj)
-
-    computed.forEach((key) => {
-      _.set(out, key, computing[key].call(out))
-    })
 
     return out
   }
