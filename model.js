@@ -604,17 +604,9 @@ class Model {
     return this.document.apply(this, arguments)
   }
 
-  static document (selector) {
-    if (Array.isArray(selector)) {
-      return selector.map((x) => this.document(x))
-    }
-
-    selector = this.castDocumentSelector(selector)
-
-    const result = this.collection.document(selector)
-    const resultCasted = this.castQueryResult(result)
-
-    return resultCasted
+  static document () {
+    return this.mqbDocument.apply(this, arguments)
+      .fetch()
   }
 
   static documents (keys) {
@@ -737,7 +729,7 @@ class Model {
     let result
 
     docMeta = this.exists(selector)
-    result = docMeta && this.firstExample(docMeta, opts)
+    result = docMeta && this.document(docMeta, opts)
 
     if (!result) {
       result = typeof orValue === 'function' ? orValue(e, selector) : orValue
@@ -1176,6 +1168,15 @@ class Model {
   static mqbExistsFirstExample () {
     return this.mqbExistsByExample.apply(this, arguments)
       .first()
+  }
+
+  static mqbDocument (selector, opts) {
+    const query = this.mqb(opts, [
+      'last'
+    ])
+
+    return query
+      .document(selector)
   }
 
   static mqbFirstExample () {

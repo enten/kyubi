@@ -1,5 +1,6 @@
 const _ = require('lodash')
 const AQB = require('aqb')
+const {ArangoError, errors} = require('@arangodb')
 const {ForExpression} = require('aqb/types')
 
 const DEFAULT = {
@@ -133,6 +134,7 @@ const API_OPTIONS = {
   cast: true,
   count: false,
   distinct: false,
+  document: null,
   edges: null,
   example: null,
   for: null,
@@ -230,12 +232,37 @@ const API_MIXINS = {
     return result
   },
   run () {
-    const {count, first, last, pair, pluck} = this.opts
+    const {count, document, first, last, pair, pluck} = this.opts
     const cursor = this.model.query(this)
+
+    if (document) {
+      const next = cursor.next.bind(cursor)
+
+      cursor.next = () => {
+        const data = next()
+
+        if (!data) {
+          throw new ArangoError({
+            errorNum: errors.ERROR_ARANGO_DOCUMENT_NOT_FOUND.code,
+            errorMessage: `${errors.ERROR_ARANGO_DOCUMENT_NOT_FOUND.message}: ${JSON.stringify(document)}`
+          })
+        }
+
+        if (data._rev && typeof document._rev === 'string' && data._rev !== document._rev) {
+          throw new ArangoError({
+            errorNum: errors.ERROR_HTTP_PRECONDITION_FAILED.code,
+            errorMessage: `${errors.ERROR_HTTP_PRECONDITION_FAILED.message}: bad revision "${data._rev}" (expect "${document._rev}")`
+          })
+        }
+
+        return data
+      }
+    }
 
     if (count || first || last || pair) {
       return cursor.hasNext() ? cursor.next() : null
     }
+
 
     return cursor
   },
@@ -270,6 +297,15 @@ const API_SETTERS = {
   },
   distinct (...args) {
     return setBitValue(this, 'distinct', args)
+  },
+  document (...args) {
+    let api = setApiValue(this, 'document', args.length > 1 ? args : args[0])
+
+    if (api.opts.document) {
+      api = setApiValue(api, 'first', !Array.isArray(api.opts.document))
+    }
+
+    return api
   },
   example (...args) {
     return setCumulableNaryValues(this, 'example', _.flattenDeep(args))
@@ -751,15 +787,21 @@ function inflateQuery (api) {
 
   // FOR
 
-  if (opts.indexFilter) {
+  if (opts.document) {
+    const docId = Array.isArray(opts.document)
+      ? opts.document.map((x) => typeof x === 'object' ? x._id ||x._key : x)
+      : typeof opts.document === 'object' ? opts.document._id || opts.document._key : opts.document
+
+    opts.in = AQB.expr(`(${!Array.isArray(opts.document) ? 'RETURN ' : ''}DOCUMENT(${opts.in || model.collectionName}, ${AQB(docId).toAQL()}))`)
+  } else if (opts.indexFilter) {
     let indexFilter
 
     if (opts.indexFilter.type === 'geo') {
-      indexFilter = (coll) => `${opts.indexFilter.method}(${[coll].concat(opts.indexFilter.args.map((x) => JSON.stringify(x))).join(', ')})`
+      indexFilter = (coll) => `${opts.indexFilter.method}(${[coll].concat(opts.indexFilter.args.map((x) => AQB(x).toAQL())).join(', ')})`
     } else {
       const index = model.indexes[opts.indexFilter.key]
 
-      indexFilter = (coll) => `${opts.indexFilter.method}(${[].concat(coll, [].concat(index.fields[0], opts.indexFilter.args).map((x) => JSON.stringify(x))).join(', ')})`
+      indexFilter = (coll) => `${opts.indexFilter.method}(${[].concat(coll, [].concat(index.fields[0], opts.indexFilter.args).map((x) => AQB(x).toAQL())).join(', ')})`
     }
     
     opts.in = AQB.expr(indexFilter(opts.in || model.collectionName))
