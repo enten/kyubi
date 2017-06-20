@@ -86,6 +86,53 @@ const FULLTEXT_METHODS = [
   'byText'
 ]
 
+class EE {
+  get listeners () {
+    return lazyProperty(this, '_listeners', () => ({}))
+  }
+
+  emit (...args) {
+    const eventName = args.shift()
+    const listeners = this.listeners || this._listeners
+
+    if (listeners[eventName]) {
+      listeners[eventName].forEach((listener) => {
+        listener.apply(null, args)
+      })
+    }
+
+    return this
+  }
+
+  on (eventName, fn) {
+    const listeners = this.listeners || this._listeners
+
+    listeners[eventName] = [].concat(listeners[eventName] || [], fn)
+
+    return this
+  }
+
+  off (eventName, fn) {
+    const listeners = this.listeners || this._listeners
+
+    if (listeners[eventName]) {
+      const fnPos = listeners[eventName].lastIndexOf(fn)
+
+      if (~fnPos) {
+        listeners[eventName] = [].concat(
+          listeners[eventName].slice(0, fnPos),
+          listeners[eventName].slice(fnPos + 1)
+        )
+      }
+    }
+
+    return this
+  }
+}
+
+const GLOBAL_HOOKS = {}
+const GLOBAL_EE = new EE()
+
 class Model {
   /** @final */
   static get Document () {
@@ -192,9 +239,24 @@ class Model {
     return 'deletedAt'
   }
 
+  /** @final */
+  static get globalHooks () {
+    return GLOBAL_HOOKS
+  }
+
   /** @overridable */
   static get hidden () {
     return null
+  }
+
+  /** @final */
+  static get hooksTypes () {
+    return lazyProperty(this, '_hooksTypes', getHooksTypes)
+  }
+
+  /** @final */
+  static get hooks () {
+    return lazyProperty(this, '_hooks', () => ({}))
   }
 
   /** @final */
@@ -356,6 +418,14 @@ class Model {
     return null
   }
 
+  static addGlobalHook (type, name, fn) {
+    return addHook.call(this, this.globalHooks, null, type, name, fn)
+  }
+
+  static addHook (type, name, fn) {
+    return addHook.call(this, this.hooks, this.hooksTypes, type, name, fn)
+  }
+
   static all () {
     return this.mqbAll.apply(this, arguments)
       .fetch()
@@ -364,6 +434,11 @@ class Model {
   static any () {
     return this.mqbAny.apply(this, arguments)
       .fetch()
+  }
+
+  /** @overridable */
+  static boot (db) {
+
   }
 
   static bootstrap (db) {
@@ -658,6 +733,11 @@ class Model {
     }
 
     selector = this.castDocumentSelector(selector)
+
+    if (typeof selector === 'object' && selector._id === null) {
+      selector = Object.assign({}, selector)
+      delete selector._id
+    }
 
     return this.collection.exists(selector)
   }
@@ -1039,6 +1119,9 @@ class Model {
       _.set(doc, model.updateTimestamp, new Date(now))
     }
 
+    runHook(doc, 'beforeMoveInto', [doc, model, partitionModel])
+    runHook(doc, partitionModel.partitionMoveBeforeEvent, [doc, model, partitionModel])
+
     let partitionInstance
     let meta
 
@@ -1096,6 +1179,9 @@ class Model {
     //     writable: false
     //   })
     // }
+
+    runHook(doc, 'afterMoveInto', [doc, model, partitionModel])
+    runHook(doc, partitionModel.partitionMoveAfterEvent, [doc, model, partitionModel])
 
     return doc
   }
@@ -1406,7 +1492,13 @@ class Model {
       queryBindVars && console.debug('  `--  ', queryBindVars)
     }
 
-    return this.db._query.apply(this.db, args)
+    runHook(this, 'beforeQuery', [queryString])
+
+    const result = this.db._query.apply(this.db, args)
+
+    runHook(this, 'afterQuery', [result, queryString])
+
+    return result
   }
 
   static range () {
@@ -1447,6 +1539,8 @@ class Model {
       _.set(doc, this.updateTimestamp, new Date(now))
     }
 
+    runHook(doc, 'beforeRemove', [doc])
+
     let meta
 
     meta = this.collection.remove(id, opts)
@@ -1480,6 +1574,8 @@ class Model {
     //   })
     // }
 
+    runHook(doc, 'afterRemove', [doc])
+
     return doc
   }
 
@@ -1505,6 +1601,14 @@ class Model {
     }
 
     return this.remove(doc, _.pick(opts, CRUD_OPTIONS_KEYS))
+  }
+
+  static removeGlobalHook (type, name) {
+    return removeHook.call(this, this.globalHooks, null, type, name)
+  }
+
+  static removeHook (type, name) {
+    return removeHook.call(this, this.hooks, this.hooksTypes, type, name)
   }
 
   static replace (data, opts) {
@@ -1541,6 +1645,9 @@ class Model {
     if (this.createTimestamp && !_.get(doc, this.createTimestamp)) {
       _.set(doc, this.createTimestamp, new Date())
     }
+
+    runHook(doc, 'beforeCreate', [doc])
+    runHook(doc, 'beforeSave', [doc])
 
     const data = this.forDb(doc, {newDocument: true})
     let meta
@@ -1579,6 +1686,9 @@ class Model {
         return this.saveRelation(relName, acc, acc[relName], opts)
       }, doc)
     }
+
+    runHook(doc, 'afterCreate', [doc])
+    runHook(doc, 'afterSave', [doc])
 
     return doc
   }
@@ -1619,6 +1729,8 @@ class Model {
       throw new Error(`Can't save relation "${relName}": null value (model: ${this.name})`)
     }
 
+    const afterHooksRunners = []
+
     relDocs = relDocs.map((relDoc) => {
       let relDocMeta
       let relEdge
@@ -1632,8 +1744,15 @@ class Model {
 
           relDoc = target.find(docId)
 
-          if (!relDoc) {
+          // if (!relDoc) {
+          //   throw new Error(`Can't save relation "${relName}": document "${docId}" not found (model: ${this.name})`)
+          // }
+          if (opts.attach && !relDoc) {
             throw new Error(`Can't save relation "${relName}": document "${docId}" not found (model: ${this.name})`)
+          } else {
+            relDoc = new target({
+              [~docId.indexOf('/') ? '_id' : '_key']: docId
+            })
           }
         }
       } else if (!relDoc._modelInstance || opts.mutate == false) {
@@ -1683,6 +1802,13 @@ class Model {
 
       return [relDoc, relDocMeta, relEdge]
     }).map(([relDoc, relDocMeta, relEdge], index) => {
+      runHook(doc, opts.detach ? 'beforeDetachRelation' : 'beforeAttachRelation', [relDoc, doc])
+      runHook(doc, 'beforeSaveRelation', [relDoc, doc])
+
+      afterHooksRunners.push(() => {
+        runHook(doc, opts.detach ? 'afterDetachRelation' : 'afterAttachRelation', [relDoc, doc])
+        runHook(doc, 'afterSaveRelation', [relDoc, doc])
+      })
 
       if (!index && opts.sync) {
         pivot.mqb
@@ -1745,6 +1871,8 @@ class Model {
       }
     }
 
+    afterHooksRunners.forEach((runAfterHook) => runAfterHook())
+
     return doc
   }
 
@@ -1784,6 +1912,8 @@ class Model {
       db = this.db
     }
 
+    runHook(this, 'beforeSetup', [this, db])
+
     const partitionsPlans = getModelPartitionsPlans(this)
 
     Object.keys(partitionsPlans).forEach((partitionKey) => {
@@ -1809,6 +1939,8 @@ class Model {
       })
     })
 
+    runHook(this, 'afterSetup', [this, db])
+
     return this
   }
 
@@ -1821,6 +1953,8 @@ class Model {
     if (!db) {
       db = this.db
     }
+
+    runHook(this, 'beforeTeardown', [this, db])
 
     const {force, onlyInDevMode} = opts || {}
 
@@ -1839,6 +1973,8 @@ class Model {
         }
       })
     }
+
+    runHook(this, 'afterTeardown', [this, db])
 
     return this
   }
@@ -1870,6 +2006,9 @@ class Model {
     if (this.updateTimestamp) {
       _.set(doc, this.updateTimestamp, new Date())
     }
+
+    runHook(doc, opts.replace ? 'beforeReplace' : 'beforeUpdate', [doc])
+    runHook(doc, 'beforeSave', [doc])
 
     data = this.forDb(doc)
 
@@ -1912,6 +2051,9 @@ class Model {
       }, doc)
     }
 
+    runHook(doc, opts.replace ? 'afterReplace' : 'afterUpdate', [doc])
+    runHook(doc, 'afterSave', [doc])
+
     return doc
   }
 
@@ -1949,7 +2091,7 @@ class Model {
   }
 
   static _PRINT (context) {
-    context.output += `[Model "${this.modelName}" (${this.boostrapped ? ['collection:', this.collectionName].join(' ') : 'not boostraped'})]`
+    context.output += `[Model "${this.modelName}" (${this.bootstrapped ? ['collection:', this.collectionName].join(' ') : 'not bootstrapped'})]`
   }
 
   constructor (data) {
@@ -1968,6 +2110,10 @@ class Model {
     if (data) {
       this.constructor.fillInternals(this, data)
       this.constructor.fill(this, data)
+
+      if (data._listeners) {
+        Object.assign(this._listeners, data._listeners)
+      }
     }
   }
 
@@ -2099,6 +2245,33 @@ class EdgeModel extends Model {
   }
 }
 
+function addHook (hooks, hooksTypes, type, name, fn) {
+  if (hooksTypes && hooksTypes.indexOf(type) === -1) {
+    throw new Error(`Add hook failed: unknow type "${type}"`)
+  }
+
+  if (typeof name === 'function') {
+    fn = name
+    name = fn.name
+  }
+
+  if (!name || typeof name !== 'string') {
+    throw new Error(`Add hook failed: missing name`)
+  }
+
+  if (typeof fn !== 'function') {
+    throw new Error(`Add hook failed: missing function`)
+  }
+
+  if (!hooks[type]) {
+    hooks[type] = {}
+  }
+
+  hooks[type][name] = fn
+
+  return this
+}
+
 function bootstrapModel (model, db) {
   if (model.bootstrapped) {
     throw new Error(`Model "${model.name}" is already bootstrapped`)
@@ -2112,6 +2285,10 @@ function bootstrapModel (model, db) {
       writable: true
     })
   }
+
+  model.boot(db)
+
+  runHook(model, 'beforeBootstrap', [model])
 
   const design = getModelSchema(model)
   const collection = db._collection(design.name)
@@ -2166,6 +2343,8 @@ function bootstrapModel (model, db) {
     value: model,
     writable: true
   })
+
+  runHook(model, 'afterBootstrap', [model])
 
   return model
 }
@@ -2266,9 +2445,14 @@ function bootstrapModelPartitions (model) {
     value: partitionsModels
   })
 
+  model._hooksTypes.length = 0
+  model._hooksTypes.push.apply(model._hooksTypes, getHooksTypes(model))
+
   Object.keys(partitionsModels).forEach((key) => {
     if (key !== 'main') {
       const partitionModel = partitionsModels[key]
+
+      partitionModel.boot(model.db)
 
       Object.defineProperty(db._models, partitionModel.modelName, {
         value: partitionModel
@@ -2413,7 +2597,7 @@ function createPartitionsModels (model) {
   Object.keys(partitionsPlans).forEach((key) => {
     const plan = partitionsPlans[key]
     const collection = model.db._collection(plan.collectionName)
-    
+
     if (!collection) {
       throw new ArangoError({
         errorNum: errors.ERROR_ARANGO_COLLECTION_NOT_FOUND.code,
@@ -2450,6 +2634,18 @@ function createPartitionsModels (model) {
         return key
       }
 
+      static get partitionMoveAfterEvent () {
+        return plan.moveAfterEvent
+      }
+
+      static get partitionMoveBeforeEvent () {
+        return plan.moveBeforeEvent
+      }
+
+      static get partitionMoveMethod () {
+        return plan.moveMethod
+      }
+
       static get partitionName () {
         return plan.name
       }
@@ -2484,6 +2680,15 @@ function createPartitionsModels (model) {
       Object.defineProperties(model, {
         'partition': {
           value: key
+        },
+        'partitionMoveAfterEvent': {
+          value: plan.moveAfterEvent
+        },
+        'partitionMoveBeforeEvent': {
+          value: plan.moveBeforeEvent
+        },
+        'partitionMoveMethod': {
+          value: plan.moveMethod
         },
         'partitionName': {
           value: plan.name
@@ -2570,34 +2775,37 @@ function getDocumentsName (model) {
 
 function getEdgeRelations (model) {
   const jointure = model.join
-  const fromModel = model.db._models(jointure.from)
-  const toModel = model.db._models(jointure.to)
 
-  if (!fromModel) {
-    throw new Error(`Model "${model.name}" reference unknow model "${jointure.from}"`)
-  }
+  // const fromModel = model.db._models(jointure.from)
+  // const toModel = model.db._models(jointure.to)
 
-  if (!toModel) {
-    throw new Error(`Model "${model.name}" reference unknow model "${jointure.to}"`)
-  }
+  // if (!fromModel) {
+  //   throw new Error(`Model "${model.name}" reference unknow model "${jointure.from}"`)
+  // }
 
-  let fromRelName = fromModel.documentName
-  let toRelName = toModel.documentName
+  // if (!toModel) {
+  //   throw new Error(`Model "${model.name}" reference unknow model "${jointure.to}"`)
+  // }
 
-  let fromModelName = fromModel.name
-  let toModelName = toModel.name
+  // let fromRelName = fromModel.documentName
+  // let toRelName = toModel.documentName
 
-  if (fromModel === toModel) {
-    toRelName += '2'
-    fromModelName += '.from'
-    toModelName += '.to'
-  }
+  // let fromModelName = fromModel.name
+  // let toModelName = toModel.name
+  let fromModelName = jointure.from
+  let toModelName = jointure.to
+
+  // if (fromModel === toModel) {
+  //   toRelName += '2'
+  //   fromModelName += '.from'
+  //   toModelName += '.to'
+  // }
 
   return {
     origin: fromModelName,
     target: toModelName,
-    [fromRelName]: fromModelName,
-    [toRelName]: toModelName
+    // [fromRelName]: fromModelName,
+    // [toRelName]: toModelName
   }
 }
 
@@ -2632,6 +2840,34 @@ function getFormatterForServer (model) {
 
     return out
   }
+}
+
+function getHooksTypes (model) {
+  return [].concat(
+    'attachRelation',
+    'bootstrap',
+    'create',
+    'detachRelation',
+    'moveInto',
+    'query',
+    'remove',
+    'replace',
+    'save',
+    'saveRelation',
+    'setup',
+    'teardown',
+    'update',
+    !model.bootstrapped ? [] : Object.keys(model.partitionsModels).map((key) => {
+      return model.partitionsModels[key].partitionMoveMethod
+    })
+  )
+  .map((methodName) => _.upperFirst(methodName))
+  .reduce((acc, methodName) => {
+    return acc.concat(
+      `before${methodName}`,
+      `after${methodName}`
+    )
+  }, [])
 }
 
 function getMetaAttributes (model) {
@@ -2753,6 +2989,9 @@ function getModelPartitionsPlans (model) {
       plan.join.from += partitionName
       plan.join.to += partitionName
     }
+
+    plan.moveBeforeEvent = `before${_.upperFirst(plan.moveMethod)}`
+    plan.moveAfterEvent = `after${_.upperFirst(plan.moveMethod)}`
 
     partitionsPlans[key] = plan
   })
@@ -3039,5 +3278,94 @@ function lazyProperty (model, key, getter) {
 
   return model[key]
 }
+
+function removeHook (hooks, hooksTypes, type, name) {
+  if (hooksTypes && hooksTypes.indexOf(type) === -1) {
+    throw new Error(`Remove hook failed: unknow type "${type}"`)
+  }
+
+  if (typeof name === 'function') {
+    name = name.name
+  }
+
+  if (!name || typeof name !== 'string') {
+    throw new Error(`Remove hook failed: missing name`)
+  }
+
+  if (hooks[type] && hooks[type][name]) {
+    delete hooks[type][name]
+  }
+
+  return this
+}
+
+function runHook (model, type, args) {
+  if (arguments.length < 3) {
+    args = []
+  }
+
+  if (!Array.isArray(args)) {
+    args = [args]
+  }
+
+  let doc
+
+  if (model._modelInstance) {
+    doc = model
+    model = doc.constructor
+  }
+
+  if (model.hooksTypes.indexOf(type) === -1) {
+    throw new Error(`Run hook failed: unknow type "${type}"`)
+  }
+
+  const globalHooks = model.globalHooks[type]
+  const hooks = model.hooks[type]
+
+  if (globalHooks) {
+    Object.getOwnPropertyNames(globalHooks).forEach((key) => {
+      const fn = globalHooks[key]
+
+      fn.apply(null, [model].concat(args))
+    })
+  }
+
+  if (hooks) {
+    Object.getOwnPropertyNames(hooks).forEach((key) => {
+      const fn = hooks[key]
+
+      fn.apply(null, args)
+    })
+  }
+
+  model.emitGlobal.apply(model, [type, model].concat(args))
+
+  model.emit.apply(model, [type].concat(args))
+
+  if (doc) {
+    doc._emit.apply(doc, [type].concat(args))
+  }
+
+  return model
+}
+
+Object.getOwnPropertyNames(EE.prototype).forEach((key) => {
+  if (~['constructor', 'length', 'name', 'prototype'].indexOf(key)) {
+    return
+  }
+
+  const desc = Object.getOwnPropertyDescriptor(EE.prototype, key)
+
+  if (typeof GLOBAL_EE[key] === 'function') {
+    GLOBAL_EE[key] = function (...args) {
+      EE.prototype[key].apply(GLOBAL_EE, args)
+      return this
+    }
+  }
+
+  Object.defineProperty(Model, key, desc)
+  Object.defineProperty(Model, key.concat('Global'), {get: () => GLOBAL_EE[key]})
+  Object.defineProperty(Model.prototype, '_'.concat(key), desc)
+})
 
 module.exports = Model
