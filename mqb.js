@@ -845,19 +845,32 @@ function inflateQuery (api) {
   } else {
     let merged = {}
 
-    // Populate relations
+    // Computed properties
 
-    if (!opts.pair && !opts.pluck && model.computed) {
+    if (model.computed) {
       Object.keys(model.computed).forEach((key) => {
-        if (!opts.keep || ~opts.keep.indexOf(key)) {
+        if (
+          (opts.pluck === key) ||
+          (opts.pair && ~_.flattenDeep(_.castArray(opts.pair)).indexOf(key)) ||
+          (opts.sort && ~_.flattenDeep(_.castArray(opts.sort)).indexOf(key)) ||
+          (!opts.sort && ~_.castArray(model.sortBy).indexOf(key)) ||
+          (!opts.keep || ~opts.keep.indexOf(key))
+        ) {
+          const computedKey = `${docName}_${key}`
           const computedValue = computeProperty(model.computed[key], docName)
 
           if (computedValue) {
-            merged[key] = computedValue
+            query = query.let(computedKey, AQB.expr(`(${computedValue.toAQL()})`))
+
+            if (!opts.pair && !opts.pluck && (!opts.keep || ~opts.keep.indexOf(key))) {
+              merged[key] = computedKey
+            }
           }
         }
       })
     }
+
+    // Populate relations
 
     if (opts.with) {
       _.castArray(
@@ -1293,7 +1306,7 @@ function parseOptionFilterRaw (raw, docName, computed, isNot) {
 
     if (docName && typeof left === 'string') {
       if (computed && computed[left]) {
-        left = computeProperty(computed[left], docName)
+        left = `${docName}_${left}`
       } else if (!left.startsWith(docName)) {
         left = [docName, left].join('.')
       }
@@ -1462,7 +1475,7 @@ function parseOptionPair (pair, docName, computed) {
 
     if (typeof attr === 'string') {
       if (computed && computed[attr]) {
-        return computeProperty(computed[attr], docName).toAQL()
+        return `${docName}_${attr}`
       } else if (!attr.startsWith(docName)) {
         return [docName, attr].join('.')
       }
@@ -1479,7 +1492,7 @@ function parseOptionPluck (pluck, docName, computed) {
 
   if (typeof pluck === 'string') {
     if (computed && computed[pluck]) {
-      pluck = computeProperty(computed[pluck], docName).toAQL()
+      pluck = `${docName}_${pluck}`
     } else if (!pluck.startsWith(docName)) {
       pluck = [docName, pluck].join('.')
     }
@@ -1561,7 +1574,7 @@ function parseOptionSort (args, docName, computed) {
 
     if (docName && typeof attr === 'string') {
       if (computed && computed[attr]) {
-        attr = computeProperty(computed[attr], docName).toAQL()
+        attr = `${docName}_${attr}`
       } else if (!attr.startsWith(docName)) {
         attr = [docName, attr].join('.')
       }
