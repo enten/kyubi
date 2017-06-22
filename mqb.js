@@ -1,6 +1,6 @@
 const _ = require('lodash')
 const AQB = require('aqb')
-const {ArangoError, errors} = require('@arangodb')
+const {ArangoError, ArangoQueryCursor, errors} = require('@arangodb')
 const {ForExpression} = require('aqb/types')
 
 const DEFAULT = {
@@ -190,18 +190,7 @@ const API_MIXINS = {
     return this
   },
   fetch () {
-    const {cast, count, first, last, pair, pluck} = this.opts
-    const result = this.run()
-
-    if (count || pair || pluck) {
-      return result
-    }
-
-    if (first || last) {
-      return this.model.castQueryResult(result, this)
-    }
-
-    return this.model.castQueryCursor(result, this)
+    return this.run()
   },
   fork (model, newOpts) {
     return forkApi(model, this, newOpts)
@@ -223,9 +212,12 @@ const API_MIXINS = {
   iterate (iterator) {
     const cursor = this.fetch()
     const result = []
-    let index = 0
 
-    for (; cursor.hasNext(); result.push(iterator(cursor.next(), index++)));
+    for (
+      let index = 0;
+      cursor.hasNext();
+      result.push(iterator(cursor.next(), index++, cursor))
+    );
 
     cursor.dispose()
 
@@ -233,31 +225,7 @@ const API_MIXINS = {
   },
   run () {
     const {count, document, first, last, pair, pluck} = this.opts
-    const cursor = this.model.query(this)
-
-    if (document) {
-      const next = cursor.next.bind(cursor)
-
-      cursor.next = () => {
-        const data = next()
-
-        if (!data) {
-          throw new ArangoError({
-            errorNum: errors.ERROR_ARANGO_DOCUMENT_NOT_FOUND.code,
-            errorMessage: `${errors.ERROR_ARANGO_DOCUMENT_NOT_FOUND.message}: ${JSON.stringify(document)}`
-          })
-        }
-
-        if (data._rev && typeof document._rev === 'string' && data._rev !== document._rev) {
-          throw new ArangoError({
-            errorNum: errors.ERROR_HTTP_PRECONDITION_FAILED.code,
-            errorMessage: `${errors.ERROR_HTTP_PRECONDITION_FAILED.message}: bad revision "${data._rev}" (expect "${document._rev}")`
-          })
-        }
-
-        return data
-      }
-    }
+    let cursor = new ModelQueryCursor(this)
 
     if (count || first || last || pair) {
       return cursor.hasNext() ? cursor.next() : null
@@ -547,6 +515,245 @@ function ForExpression2 (prev, varname, expr) {
 }
 ForExpression2.prototype = Object.create(ForExpression.prototype)
 ForExpression2.prototype.constructor = ForExpression2
+
+class ModelQueryCursor extends ArangoQueryCursor {
+  constructor (qb) {
+    const {_database, data} = qb.model.query(qb)
+
+    super(_database, data)
+
+    Object.keys(qb.model.partitionsModels).forEach((key) => {
+      const {partitionMoveMethod} = qb.model.partitionsModels[key]
+
+      Object.defineProperty(this, partitionMoveMethod, {
+        value: (opts) => {
+          return this.moveInto(key, opts)
+        }
+      })
+    })
+
+    this.qb = qb
+    this.transformers = []
+  }
+
+  count () {
+    return this._count
+  }
+
+  fill (...args) {
+    this.transformers.push((doc) => this.qb.model.fill.apply(this.qb.model, [doc].concat(args)))
+
+    return this
+  }
+
+  fillInternals (...args) {
+    this.transformers.push((doc) => this.qb.model.fillInternals.apply(this.qb.model, [doc].concat(args)))
+
+    return this
+  }
+
+  first (cast) {
+    if (!this.hasOwnProperty('_first') && this.hasNext()) {
+      this.next(cast)
+    }
+
+    this.dispose()
+
+    return this._first || null
+  }
+
+  forEach (cast, fn) {
+    if (typeof cast === 'function') {
+      fn = cast
+      cast = undefined
+    }
+
+    for (
+      let i = 0;
+      this.hasNext();
+      fn(this.next(cast), i++, this)
+    );
+
+    this.dispose()
+  }
+
+  iterate (cast, fn) {
+    return this.map(cast, fn)
+  }
+
+  last (cast) {
+    for (
+      ;
+      this.hasNext();
+      this.next(cast)
+    );
+
+    this.dispose()
+
+    return this._last || null
+  }
+
+  map (cast, fn) {
+    if (typeof cast === 'function') {
+      fn = cast
+      cast = undefined
+    }
+
+    const result = []
+
+    for (
+      let i = 0;
+      this.hasNext();
+      result.push(fn(this.next(cast), i++, this))
+    );
+
+    this.dispose()
+
+    return result
+  }
+
+  moveInto (partitionModel, opts) {
+    return this.map((doc) => {
+      return this.qb.model.moveInto(partitionModel, doc, opts)
+    })
+  }
+
+  next (cast) {
+    let doc = super.next()
+
+    if (cast != null ? cast != false : (this.qb && this.qb.opts.cast != false)) {
+      doc = this.qb.model.castQueryResult(doc, this.qb)
+    }
+
+    if (this.qb.opts.document) {
+      if (!doc) {
+        throw new ArangoError({
+          errorNum: errors.ERROR_ARANGO_DOCUMENT_NOT_FOUND.code,
+          errorMessage: `${errors.ERROR_ARANGO_DOCUMENT_NOT_FOUND.message}: ${JSON.stringify(this.qb.opts.document)}`
+        })
+      }
+
+      if (doc._rev && typeof this.qb.opts.document._rev === 'string' && doc._rev !== this.qb.opts.document._rev) {
+        throw new ArangoError({
+          errorNum: errors.ERROR_HTTP_PRECONDITION_FAILED.code,
+          errorMessage: `${errors.ERROR_HTTP_PRECONDITION_FAILED.message}: bad revision "${doc._rev}" (expect "${this.qb.opts.document._rev}")`
+        })
+      }
+    }
+
+    doc = this.transformers.reduce((acc, transform) => transform(acc), doc)
+
+    if (!this.hasOwnProperty('_first')) {
+      this._first = doc
+    }
+
+    if (doc && !this.hasNext() && !this.hasOwnProperty('_last')) {
+      this._last = doc
+    }
+
+    return doc
+  }
+
+  pair (...args) {
+    args = _.flattenDeep(args)
+
+    let [left, right] = args
+
+    if (args.length < 2) {
+      right = left
+    }
+
+    return this.reduce((acc, doc) => {
+      acc[doc[left]] = doc[right]
+
+      return acc
+    }, {})
+  }
+
+  pick (cast, count) {
+    if (typeof cast === 'number') {
+      count = cast
+      cast = undefined
+    }
+
+    const result = []
+
+    for (
+      let i = 0;
+      this.hasNext() && i++ < count;
+      result.push(this.next(cast))
+    );
+
+    this.dispose()
+
+    return result
+  }
+
+  pickInverse (cast, count) {
+    if (typeof cast === 'number') {
+      count = cast
+      cast = undefined
+    }
+
+    const result = []
+
+    while (this.hasNext()) {
+      for (; result.length >= count; result.shift());
+
+      result.push(this.next(cast))
+    }
+
+    this.dispose()
+
+    return result.reverse()
+  }
+
+  pluck (key) {
+    return this.map((doc) => doc[key])
+  }
+
+  reduce (cast, fn, acc) {
+    if (typeof cast === 'function') {
+      acc = fn
+      fn = cast
+      cast = undefined
+    }
+
+    if (!this.hasNext()) {
+      return acc
+    }
+
+    if (arguments.length < 2) {
+      acc = this.next(cast)
+    }
+
+    for (
+      let i = 0;
+      this.hasNext();
+      (acc = fn(acc, this.next(cast), i++, this))
+    );
+
+    this.dispose()
+
+    return acc
+  }
+
+  _PRINT (context) {
+    context.output += this.toString()
+  }
+}
+
+;[
+  'remove',
+  'replace',
+  'update'
+].forEach((methodName) => {
+  ModelQueryCursor.prototype[methodName] = function (opts) {
+    return this.map((doc) => {
+      return this.qb.model[methodName].call(this.qb.model, doc, opts)
+    })
+  }
+})
 
 function MQB (model, opts, excluded) {
   let api = createApi(Object.assign({}, API_PROTO, {
@@ -1626,15 +1833,28 @@ function setCumulableNaryValues (api, key, args) {
 }
 
 module.exports = Object.assign(MQB.bind(null), {
+  API_FULLTEXT_METHODS,
+  API_INDEXES_SETTERS,
+  API_INDEXES_SETTERS_KEYS,
   API_MIXINS,
   API_OPTIONS,
   API_PROTO,
   API_SETTERS,
+  API_SETTERS_KEYS,
+  API_GEO_METHODS,
   DEFAULT,
   FILTER_COMPARATORS,
+  FILTER_COMPARATORS_INVERSED,
   FILTER_OPERATORS,
+  FILTER_OPERATORS_INVERSED,
+  HAS_FILTER_COMPARATORS_KEYS,
+  HAS_FILTER_COMPARATORS,
+  HAS_FILTER_COMPARATORS_INVERSED,
   SORT_DIRECTIONS,
   SORT_DIRECTIONS_INVERSED,
+  ForExpression2,
+  ModelQueryCursor,
+  computeProperty,
   createApi,
   getApiSetterKeys,
   inflateQuery,
