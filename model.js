@@ -907,18 +907,6 @@ class Model {
     return this.edges(doc, relName, opts)
   }
 
-  static index (id) {
-    if (typeof id === 'number') {
-      const indexes = this.indexes
-
-      if (indexes[id]) {
-        id = indexes[id].id
-      }
-    }
-
-    return this.collection.index(id)
-  }
-
   static insert () {
     return this.save.apply(this, arguments)
   }
