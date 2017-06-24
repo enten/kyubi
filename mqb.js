@@ -2,6 +2,7 @@ const _ = require('lodash')
 const AQB = require('aqb')
 const {ArangoError, ArangoQueryCursor, errors} = require('@arangodb')
 const {ForExpression} = require('aqb/types')
+const {GeneralArrayCursor} = require('@arangodb/simple-query')
 
 const DEFAULT = {
   FILTER_COMPARATOR: 'eq',
@@ -516,11 +517,26 @@ function ForExpression2 (prev, varname, expr) {
 ForExpression2.prototype = Object.create(ForExpression.prototype)
 ForExpression2.prototype.constructor = ForExpression2
 
-class ModelQueryCursor extends ArangoQueryCursor {
-  constructor (qb) {
-    const {_database, data} = qb.model.query(qb)
+const ModelQueryCursorParent = ArangoQueryCursor || GeneralArrayCursor
+const isArangoQueryCursor = ModelQueryCursorParent === ArangoQueryCursor
 
-    super(_database, data)
+class ModelQueryCursor extends ModelQueryCursorParent {
+  constructor (qb) {
+    const cursor = qb.model.query(qb)
+
+    if (isArangoQueryCursor) {
+      super(
+        cursor._database,
+        cursor.data
+      )
+    } else {
+      super(
+        cursor._documents,
+        cursor._skip,
+        cursor._limit,
+        Object.assign({}, cursor._extra, {cached: cursor._cached})
+      )
+    }
 
     Object.keys(qb.model.partitionsModels).forEach((key) => {
       const {partitionMoveMethod} = qb.model.partitionsModels[key]
@@ -537,7 +553,7 @@ class ModelQueryCursor extends ArangoQueryCursor {
   }
 
   count () {
-    return this._count
+    return isArangoQueryCursor ? this._count : super.count()
   }
 
   fill (...args) {
@@ -1854,6 +1870,7 @@ module.exports = Object.assign(MQB.bind(null), {
   SORT_DIRECTIONS_INVERSED,
   ForExpression2,
   ModelQueryCursor,
+  ModelQueryCursorParent,
   computeProperty,
   createApi,
   getApiSetterKeys,
@@ -1864,6 +1881,7 @@ module.exports = Object.assign(MQB.bind(null), {
   isAQBHasComparatorName,
   isAQBOperatorName,
   isAQBObject,
+  isArangoQueryCursor,
   isEmptyArgs,
   isFalsyArgs,
   isFalsyBit,
