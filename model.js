@@ -7,7 +7,6 @@ const joi = require('joi')
 const {
   ArangoError,
   aql: AQL,
-  db,
   errors,
   printObject
 } = require('@arangodb')
@@ -2380,8 +2379,11 @@ function bootstrapModelPartitions (model) {
 
       partitionModel.boot(model.db)
 
-      Object.defineProperty(db._models, partitionModel.modelName, {
-        value: partitionModel
+      Object.defineProperty(model.db._models, partitionModel.modelName, {
+        configurable: true,
+        enumerable: false,
+        value: partitionModel,
+        writable: false
       })
     }
   })
