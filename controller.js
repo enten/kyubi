@@ -33,11 +33,11 @@ class Controller {
 
   /** @final */
   static bootstrap (context) {
-    const router = this.router()
+    const controller = new this()
 
-    context.use(router)
+    context.use(controller.router)
 
-    return router
+    return controller
   }
 
   /** @final */
@@ -50,7 +50,7 @@ class Controller {
   constructor (router) {
     this.router = router || createRouter()
 
-    inflateRoutes(this, this.constructor.routes)
+    inflateRoutes(this, getControllerRoutes(this))
   }
 
   /** @overridable */
@@ -73,32 +73,6 @@ class ModelController extends Controller {
   /** @overridable */
   static get only () {
     return null
-  }
-
-  constructor (router) {
-    super(router)
-
-    const {except, only} = this.constructor
-    let modelRoutes = {
-      index: [['GET', '/']],
-      create: [['GET', '/create']],
-      store: [['POST', '/']],
-      show: [['GET', '/:_key']],
-      edit: [['GET', '/:_key/edit']],
-      replace: [['PUT', '/:_key']],
-      update: [['PATCH', '/:_key']],
-      delete: [['DELETE', '/:_key']]
-    }
-
-    if (except) {
-      modelRoutes = _.omit(modelRoutes, except)
-    }
-
-    if (only) {
-      modelRoutes = _.pick(modelRoutes, only)
-    }
-
-    inflateRoutes(this, modelRoutes)
   }
 
   create (req, res) {
@@ -134,12 +108,55 @@ class ModelController extends Controller {
   }
 }
 
+function getControllerRoutes (controller) {
+  const {baseUri, except, only} = controller.constructor
+  let routes = Object.assign({}, controller.constructor.routes)
+
+  Object.keys(routes).forEach((endpointName) => {
+    routes[endpointName] = parseEndpointRoute(routes[endpointName], baseUri)
+  })
+
+  if (controller instanceof ModelController) {
+    let modelRoutes = {
+      index: [['GET', '/']],
+      create: [['GET', '/create']],
+      store: [['POST', '/']],
+      show: [['GET', '/:_key']],
+      edit: [['GET', '/:_key/edit']],
+      replace: [['PUT', '/:_key']],
+      update: [['PATCH', '/:_key']],
+      delete: [['DELETE', '/:_key']]
+    }
+
+    if (except) {
+      modelRoutes = _.omit(modelRoutes, except)
+    }
+
+    if (only) {
+      modelRoutes = _.pick(modelRoutes, only)
+    }
+
+    Object.keys(modelRoutes).forEach((endpointName) => {
+      if (!routes[endpointName] || !routes[endpointName].path) {
+        const modelRoute = parseEndpointRoute(modelRoutes[endpointName], baseUri)
+
+         if (!routes[endpointName]) {
+           routes[endpointName] = modelRoute
+         } else {
+            routes[endpointName].path = modelRoute.path
+         }
+      }
+    })
+  }
+
+  return routes
+}
+
 function inflateRoutes (controller, routes) {
-  const {baseUri} = controller.constructor
   const {router} = controller
 
   Object.keys(routes).forEach((endpointName) => {
-    const route = parseEndpointRoute(routes[endpointName], baseUri)
+    const route = routes[endpointName]
     const {register, path, middlewares} = route
 
     path.forEach(([httpMethods, endpointUri]) => {
@@ -204,38 +221,40 @@ function parseEndpointRoute (route, baseUri) {
     route = Object.assign({}, route)
   }
 
-  route.path = _.castArray(route.path)
-    .reduce((acc, path) => {
-      if (typeof path === 'string') {
-        acc = acc.concat(path.split(',').map((x) => x.trim()))
-      } else {
-        acc.push(path)
-      }
-
-      return acc
-    }, [])
-    .map((path) => {
-      if (typeof path === 'string') {
-        if (~path.indexOf(' ')) {
-          path = path.split(' ').map((x) => x.trim())
+  if (route.path) {
+    route.path = _.castArray(route.path)
+      .reduce((acc, path) => {
+        if (typeof path === 'string') {
+          acc = acc.concat(path.split(',').map((x) => x.trim()))
         } else {
-          path = [['GET'], path]
+          acc.push(path)
         }
 
-      }
+        return acc
+      }, [])
+      .map((path) => {
+        if (typeof path === 'string') {
+          if (~path.indexOf(' ')) {
+            path = path.split(' ').map((x) => x.trim())
+          } else {
+            path = [['GET'], path]
+          }
 
-      if (typeof path[0] === 'string') {
-        path[0] = path[0].split('|')
-      }
+        }
 
-      path[0] = path[0].map((method) => method.trim().toUpperCase())
+        if (typeof path[0] === 'string') {
+          path[0] = path[0].split('|')
+        }
 
-      if (baseUri && baseUri !== '/') {
-        path[1] = [baseUri, path[1][0] === '/' ? path[1].substring(1) : path[1]].join('/')
-      }
+        path[0] = path[0].map((method) => method.trim().toUpperCase())
 
-      return path
-    })
+        if (baseUri && baseUri !== '/') {
+          path[1] = [baseUri, path[1][0] === '/' ? path[1].substring(1) : path[1]].join('/')
+        }
+
+        return path
+      })
+  }
 
   return route
 }
