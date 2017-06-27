@@ -2686,7 +2686,7 @@ function getDocumentName (model) {
 }
 
 function getDocumentsName (model) {
-  return inflect.underscore(inflect.pluralize(model.name))
+  return inflect.camelize(inflect.pluralize(model.name), false)
 }
 
 function getEdgeRelations (model) {
