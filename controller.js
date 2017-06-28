@@ -157,10 +157,10 @@ function inflateRoutes (controller, routes) {
 
   Object.keys(routes).forEach((endpointName) => {
     const route = routes[endpointName]
-    const {register, path, middlewares} = route
+    const {register, path, middlewares, name} = route
 
     path.forEach(([httpMethods, endpointUri]) => {
-      httpMethods.forEach((httpMethod) => {
+      httpMethods.forEach((httpMethod, index) => {
         const endpointRoute = {name: endpointName, method: httpMethod, path: endpointUri}
         let endpoint
         let mws
@@ -179,11 +179,12 @@ function inflateRoutes (controller, routes) {
               }
             }, next)()
           },
-          controller[endpointName].bind(controller)
+          controller[endpointName].bind(controller),
+           controller.constructor.name.concat('_', index ? httpMethod.toLowerCase().concat(_.upperFirst(name || endpointName)) : name || endpointName)
         )
 
         Object.keys(route).forEach((key) => {
-          if (['middlewares', 'path', 'register'].indexOf(key) === -1) {
+          if (['middlewares', 'name', 'path', 'register'].indexOf(key) === -1) {
             endpoint[key].apply(endpoint, _.castArray(route[key]))
           }
         })
