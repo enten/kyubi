@@ -2,6 +2,8 @@ const _ = require('lodash')
 const createRouter = require('@arangodb/foxx/router')
 const inflect = require('i')()
 
+const DEFAULT_PAGE_SIZE = 20
+
 class Controller {
   /** @final */
   static get Model () {
@@ -80,7 +82,11 @@ class ModelController extends Controller {
   }
 
   delete (req, res) {
-    res.send({method: 'delete'})
+    const _key = req.param('_key')
+    const opts = req.queryParams
+    const result = req.model.remove(_key, opts)
+
+    res.send(result)
   }
 
   edit (req, res) {
@@ -88,23 +94,63 @@ class ModelController extends Controller {
   }
 
   index (req, res) {
-    res.send(this.constructor.model.all())
+    const opts = req.queryParams
+    let {page, pageSize} = opts
+
+    delete opts.page
+    delete opts.pageSize
+
+    page = page || 1
+    pageSize = pageSize || req.model.pageSize || DEFAULT_PAGE_SIZE
+
+    const result = req.model.paginate(page, pageSize, opts)
+
+    res.send({
+      data: result.toArray(),
+      page,
+      pageSize
+      ,x:req.model.modelName
+    })
   }
 
   replace (req, res) {
-    res.send({method: 'replace'})
+    const _key = req.param('_key')
+    const data = req.json()
+    const opts = Object.assign({}, req.queryParams, {replace: true})
+    const result = req.model.findOrFail(_key, null, opts)
+
+    result._fill(data)
+    result._save(opts)
+
+    res.send(result)
   }
 
   show (req, res) {
-    res.send({method: 'show'})
+    const _key = req.param('_key')
+    const opts = req.queryParams
+    const result = req.model.findOrFail(_key, null, opts)
+
+    res.send(result)
   }
 
   store (req, res) {
-    res.send({method: 'store'})
+    const data = req.json()
+    const opts = req.queryParams
+    const result = req.model.save(data, opts)
+
+    res.send(result)
   }
 
   update (req, res) {
-    res.send({method: 'update'})
+    const _key = req.param('_key')
+    const data = req.json()
+    const opts = Object.assign({}, req.queryParams, {replace: false})
+    const result = req.model.findOrFail(_key, null, opts)
+
+    result._fill(data)
+    result._save(opts)
+
+    res.send(result)
   }
 }
 
@@ -153,6 +199,7 @@ function getControllerRoutes (controller) {
 }
 
 function inflateRoutes (controller, routes) {
+  const isModelController = controller instanceof ModelController
   const {router} = controller
 
   Object.keys(routes).forEach((endpointName) => {
@@ -169,6 +216,14 @@ function inflateRoutes (controller, routes) {
           router,
           endpointUri,
           (req, res, next) => {
+            if (isModelController) {
+              req.model = controller.constructor.model
+
+              if (req.queryParams.partition) {
+                req.model = req.model[req.queryParams.partition]
+              }
+            }
+
             mws.reverse().reduce((acc, mw) => {
               const fn = acc
               return (err) => {
