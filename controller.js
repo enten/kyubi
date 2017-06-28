@@ -109,7 +109,6 @@ class ModelController extends Controller {
       data: result.toArray(),
       page,
       pageSize
-      ,x:req.model.modelName
     })
   }
 
