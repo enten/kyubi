@@ -107,6 +107,7 @@ class ModelController extends Controller {
 
     res.send({
       data: result.toArray(),
+      count: result.count(),
       page,
       pageSize
     })
