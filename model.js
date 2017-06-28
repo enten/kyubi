@@ -1239,12 +1239,12 @@ class Model {
   }
 
   static mqbPaginate (page, perPage, ...args) {
-    if (typeof perPage !== 'number') {
+    if (typeof perPage !== 'number' && (typeof perPage !== 'string' || isNaN(perPage))) {
       args.unshift(perPage)
       perPage = undefined
     }
 
-    if (typeof page !== 'number') {
+    if (typeof page !== 'number' && (typeof page !== 'string' || isNaN(page))) {
       args.unshift(page)
       page = undefined
     }
