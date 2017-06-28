@@ -1425,7 +1425,7 @@ class Model {
   }
 
   static remove (doc, opts = {}) {
-    if (opts.safe != false && !opts.force && this.partitionTrashed && this.partition !== this.partitionTrashed.partition) {
+    if (opts.safe != false && !opts.force && this.partitionTrashed && this.partition !== this.partitionTrashed) {
       return this.moveInto(this.partitionTrashed, doc, opts)
     }
 
