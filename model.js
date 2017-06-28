@@ -764,12 +764,12 @@ class Model {
     return result
   }
 
-  static findOrCreate (selector, doc) {
-    return this.findOr(selector, () => this.create(doc))
+  static findOrCreate (selector, doc, opts) {
+    return this.findOr(selector, () => this.create(doc), opts)
   }
 
-  static findOrFail (selector, error) {
-    return this.findOr(selector, (e) => {throw (error || e)})
+  static findOrFail (selector, error, opts) {
+    return this.findOr(selector, (e) => {throw (error || e)}, opts)
   }
 
   static fill (doc, data, dataValue, opts = {}) {
