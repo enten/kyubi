@@ -753,7 +753,12 @@ class Model {
     result = docMeta && this.document(docMeta, opts)
 
     if (!result) {
-      result = typeof orValue === 'function' ? orValue(e, selector) : orValue
+      const error = new ArangoError({
+        errorNum: errors.ERROR_ARANGO_DOCUMENT_NOT_FOUND.code,
+        errorMessage: `${errors.ERROR_ARANGO_DOCUMENT_NOT_FOUND.message} "${selector}" (model: ${this.name})`
+      })
+
+      result = typeof orValue === 'function' ? orValue(error, selector) : orValue
     }
 
     return result
