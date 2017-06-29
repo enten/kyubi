@@ -53,6 +53,20 @@ class Controller {
     this.router = router || createRouter()
     this.routes = getControllerRoutes(this)
 
+    if (this.moveInto) {
+      Object.keys(this.constructor.model.partitionsModels).forEach((key) => {
+        const {partition, partitionMoveMethod} = this.constructor.model.partitionsModels[key]
+        
+        if (this.routes[partitionMoveMethod]) {
+          this[partitionMoveMethod] = (req, res) => {
+            req.pathParams.partition = partition
+
+            this.moveInto(req, res)
+          }
+        }
+      })
+    }
+
     inflateRoutes(this, this.routes)
   }
 
@@ -191,6 +205,19 @@ function getControllerRoutes (controller) {
 
     if (only) {
       modelRoutes = _.pick(modelRoutes, only)
+    }
+
+    if (modelRoutes.moveInto) {
+      Object.keys(controller.constructor.model.partitionsModels).forEach((key) => {
+        const {partitionMoveMethod} = controller.constructor.model.partitionsModels[key]
+        
+        if (
+          (!except || _.castArray(except).indexOf(partitionMoveMethod) === -1) &&
+          (!only || _.castArray(only).indexOf(partitionMoveMethod) !== -1)
+        ) {
+          modelRoutes[partitionMoveMethod] = [['GET', `/:_key/${partitionMoveMethod}`]]
+        }
+      })
     }
 
     Object.keys(modelRoutes).forEach((endpointName) => {
