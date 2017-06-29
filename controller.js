@@ -51,8 +51,9 @@ class Controller {
 
   constructor (router) {
     this.router = router || createRouter()
+    this.routes = getControllerRoutes(this)
 
-    inflateRoutes(this, getControllerRoutes(this))
+    inflateRoutes(this, this.routes)
   }
 
   /** @overridable */
@@ -113,6 +114,15 @@ class ModelController extends Controller {
     })
   }
 
+  moveInto (req, res) {
+    const _key = req.param('_key')
+    const partition = req.param('partition')
+    const opts = req.queryParams
+    const result = req.model.moveInto(partition, _key, opts)
+    
+    res.send(result)
+  }
+
   replace (req, res) {
     const _key = req.param('_key')
     const data = req.json()
@@ -171,7 +181,8 @@ function getControllerRoutes (controller) {
       edit: [['GET', '/:_key/edit']],
       replace: [['PUT', '/:_key']],
       update: [['PATCH', '/:_key']],
-      delete: [['DELETE', '/:_key']]
+      delete: [['DELETE', '/:_key']],
+      moveInto: [['GET', '/:_key/move/:partition']]
     }
 
     if (except) {
@@ -206,6 +217,10 @@ function inflateRoutes (controller, routes) {
     const route = routes[endpointName]
     const {register, path, middlewares, name} = route
 
+    if (typeof controller[endpointName] !== 'function') {
+      throw new Error(`Endpoint method "${endpointName}" doesn't exists (controller: ${controller.constructor.name})`)
+    }
+
     path.forEach(([httpMethods, endpointUri]) => {
       httpMethods.forEach((httpMethod, index) => {
         const endpointRoute = {name: endpointName, method: httpMethod, path: endpointUri}
@@ -235,7 +250,7 @@ function inflateRoutes (controller, routes) {
             }, next)()
           },
           controller[endpointName].bind(controller),
-           controller.constructor.name.concat('_', index ? httpMethod.toLowerCase().concat(_.upperFirst(name || endpointName)) : name || endpointName)
+          controller.constructor.name.concat('_', index ? httpMethod.toLowerCase().concat(_.upperFirst(name || endpointName)) : name || endpointName)
         )
 
         Object.keys(route).forEach((key) => {
