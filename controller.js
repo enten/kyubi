@@ -79,7 +79,6 @@ class Controller {
         ;[
           'showRelation',
           'saveRelation',
-          'detachRelation'
         ].forEach((endpoint) => {
           const endpointName = endpoint + upperFirstRelName
 
@@ -131,10 +130,6 @@ class ModelController extends Controller {
     res.send(result)
   }
 
-  detachRelation (req, res) {
-    res.send({method: 'DETACH RELATION'})
-  }
-
   edit (req, res) {
     res.send({method: 'edit'})
   }
@@ -181,7 +176,14 @@ class ModelController extends Controller {
   }
 
   saveRelation (req, res) {
-    res.send({method: 'SAVE RELATION'})
+    const _key = req.param('_key')
+    const relName = req.param('relName')
+    const data = req.json()
+    const opts = req.queryParams
+    const doc = req.model.findOrFail(_key)
+    const result = doc._rel[relName].save(data, opts)
+
+    res.send(result)
   }
 
   show (req, res) {
@@ -197,8 +199,9 @@ class ModelController extends Controller {
     const relName = req.param('relName')
     const doc = req.model.findOrFail(_key)
     const opts = req.queryParams
+    const result = doc._rel[relName].get(opts)
 
-    res.send(doc._rel[relName].get(opts) || JSON.stringify(null))
+    res.send(result || JSON.stringify(null))
   }
 
   store (req, res) {
@@ -284,8 +287,7 @@ function getControllerRoutes (controller) {
 
         ;[
           ['GET', 'showRelation'],
-          ['POST', 'saveRelation'],
-          ['DELETE', 'detachRelation']
+          ['POST', 'saveRelation']
         ].forEach(([method, endpoint]) => {
           const endpointName = endpoint + upperFirstRelName
 
