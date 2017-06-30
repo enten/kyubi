@@ -53,10 +53,15 @@ class Controller {
     this.router = router || createRouter()
     this.routes = getControllerRoutes(this)
 
+    const {
+      partitionsModels,
+      relationsKeys
+    } = this.constructor.model
+
     if (this.moveInto) {
-      Object.keys(this.constructor.model.partitionsModels).forEach((key) => {
-        const {partition, partitionMoveMethod} = this.constructor.model.partitionsModels[key]
-        
+      Object.keys(partitionsModels).forEach((key) => {
+        const {partition, partitionMoveMethod} = partitionsModels[key]
+
         if (this.routes[partitionMoveMethod]) {
           this[partitionMoveMethod] = (req, res) => {
             req.pathParams.partition = partition
@@ -64,6 +69,28 @@ class Controller {
             this.moveInto(req, res)
           }
         }
+      })
+    }
+
+    if (relationsKeys.length) {
+      relationsKeys.forEach((relName) => {
+        const upperFirstRelName = _.upperFirst(relName)
+
+        ;[
+          'showRelation',
+          'saveRelation',
+          'detachRelation'
+        ].forEach((endpoint) => {
+          const endpointName = endpoint + upperFirstRelName
+
+          if (this.routes[endpointName]) {
+            this[endpointName] = (req, res) => {
+              req.pathParams.relName = relName
+
+              this[endpoint].call(this, req, res)
+            }
+          }
+        })
       })
     }
 
@@ -102,6 +129,10 @@ class ModelController extends Controller {
     const result = req.model.remove(_key, opts)
 
     res.send(result)
+  }
+
+  detachRelation (req, res) {
+    res.send({method: 'DETACH RELATION'})
   }
 
   edit (req, res) {
@@ -149,12 +180,25 @@ class ModelController extends Controller {
     res.send(result)
   }
 
+  saveRelation (req, res) {
+    res.send({method: 'SAVE RELATION'})
+  }
+
   show (req, res) {
     const _key = req.param('_key')
     const opts = req.queryParams
     const result = req.model.findOrFail(_key, null, opts)
 
     res.send(result)
+  }
+
+  showRelation (req, res) {
+    const _key = req.param('_key')
+    const relName = req.param('relName')
+    const doc = req.model.findOrFail(_key)
+    const opts = req.queryParams
+
+    res.send(doc._rel[relName].get(opts) || JSON.stringify(null))
   }
 
   store (req, res) {
@@ -179,14 +223,28 @@ class ModelController extends Controller {
 }
 
 function getControllerRoutes (controller) {
-  const {baseUri, except, only} = controller.constructor
+  let {baseUri, except, only} = controller.constructor
   let routes = Object.assign({}, controller.constructor.routes)
+
+  if (except) {
+    except = _.castArray(except)
+  }
+
+  if (only) {
+    only = _.castArray(only)
+  }
 
   Object.keys(routes).forEach((endpointName) => {
     routes[endpointName] = parseEndpointRoute(routes[endpointName], baseUri)
   })
 
   if (controller instanceof ModelController) {
+    const {
+      partitionsModels,
+      relationsPlans,
+      relationsKeys
+    } = controller.constructor.model
+
     let modelRoutes = {
       index: [['GET', '/']],
       create: [['GET', '/create']],
@@ -208,15 +266,36 @@ function getControllerRoutes (controller) {
     }
 
     if (modelRoutes.moveInto) {
-      Object.keys(controller.constructor.model.partitionsModels).forEach((key) => {
-        const {partitionMoveMethod} = controller.constructor.model.partitionsModels[key]
-        
+      Object.keys(partitionsModels).forEach((key) => {
+        const {partitionMoveMethod} = partitionsModels[key]
+
         if (
-          (!except || _.castArray(except).indexOf(partitionMoveMethod) === -1) &&
-          (!only || _.castArray(only).indexOf(partitionMoveMethod) !== -1)
+          (!except || except.indexOf(partitionMoveMethod) === -1) &&
+          (!only || only.indexOf(partitionMoveMethod) !== -1)
         ) {
           modelRoutes[partitionMoveMethod] = [['GET', `/:_key/${partitionMoveMethod}`]]
         }
+      })
+    }
+
+    if (relationsKeys.length) {
+      relationsKeys.forEach((relName) => {
+        const upperFirstRelName = _.upperFirst(relName)
+
+        ;[
+          ['GET', 'showRelation'],
+          ['POST', 'saveRelation'],
+          ['DELETE', 'detachRelation']
+        ].forEach(([method, endpoint]) => {
+          const endpointName = endpoint + upperFirstRelName
+
+          if (
+          (!except || except.indexOf(endpointName) === -1) &&
+          (!only || only.indexOf(endpointName) !== -1)
+        ) {
+            modelRoutes[endpointName] = [[method, `/:_key/${relName}`]]
+          }
+        })
       })
     }
 
