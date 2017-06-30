@@ -583,6 +583,15 @@ class Model {
   }
 
   static create (data, opts) {
+    if (typeof data === 'object') {
+      const docId = data._id || data._key || this.generateKey(data)
+      const docExists = docId && this.exists(docId)
+
+      if (docExists) {
+        throw new Error(`Document "${docId}" already exists (model: ${this.modelName})`)
+      }
+    }
+
     return (new this(data))._save(opts)
   }
 
