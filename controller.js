@@ -163,6 +163,13 @@ class ModelController extends Controller {
     res.send(result)
   }
 
+  query (req, res) {
+    const opts = Object.assign({}, req.queryParams, req.json())
+    const result = req.model.mqb(opts).fetch()
+
+    res.send(result)
+  }
+
   replace (req, res) {
     const _key = req.param('_key')
     const data = req.json()
@@ -257,7 +264,8 @@ function getControllerRoutes (controller) {
       replace: [['PUT', '/:_key']],
       update: [['PATCH', '/:_key']],
       delete: [['DELETE', '/:_key']],
-      moveInto: [['GET', '/:_key/move/:partition']]
+      moveInto: [['GET', '/:_key/move/:partition']],
+      query: [[['GET', 'POST'], '/query']]
     }
 
     if (except) {
