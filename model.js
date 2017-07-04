@@ -11,6 +11,11 @@ const {
   printObject
 } = require('@arangodb')
 
+const {
+  EE,
+  lazyProperty
+} = require('./utils')
+
 const __DEV__ = _.get(module, 'context.isDevelopment')
 
 const DOCUMENT_COLLECTION_TYPE = 2
@@ -85,52 +90,8 @@ const FULLTEXT_METHODS = [
   'byText'
 ]
 
-class EE {
-  get listeners () {
-    return lazyProperty(this, '_listeners', () => ({}))
-  }
-
-  emit (...args) {
-    const eventName = args.shift()
-    const listeners = this.listeners || this._listeners
-
-    if (listeners[eventName]) {
-      listeners[eventName].forEach((listener) => {
-        listener.apply(null, args)
-      })
-    }
-
-    return this
-  }
-
-  on (eventName, fn) {
-    const listeners = this.listeners || this._listeners
-
-    listeners[eventName] = [].concat(listeners[eventName] || [], fn)
-
-    return this
-  }
-
-  off (eventName, fn) {
-    const listeners = this.listeners || this._listeners
-
-    if (listeners[eventName]) {
-      const fnPos = listeners[eventName].lastIndexOf(fn)
-
-      if (~fnPos) {
-        listeners[eventName] = [].concat(
-          listeners[eventName].slice(0, fnPos),
-          listeners[eventName].slice(fnPos + 1)
-        )
-      }
-    }
-
-    return this
-  }
-}
-
-const GLOBAL_HOOKS = {}
 const GLOBAL_EE = new EE()
+const GLOBAL_HOOKS = {}
 
 class Model {
   /** @final */
@@ -3192,19 +3153,6 @@ function isDocumentModel (model) {
 
 function isEdgeModel (model) {
   return model.type === EDGE_COLLECTION_TYPE
-}
-
-function lazyProperty (model, key, getter) {
-  if (!model.hasOwnProperty(key)) {
-    Object.defineProperty(model, key, {
-      enumerable: false,
-      configurable: false,
-      value: getter(model),
-      writable: false
-    })
-  }
-
-  return model[key]
 }
 
 function removeHook (hooks, hooksTypes, type, name) {
