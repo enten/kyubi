@@ -1,10 +1,11 @@
 const _ = require('lodash')
 const createRouter = require('@arangodb/foxx/router')
 const inflect = require('i')()
+const {EE} = require('./utils')
 
 const DEFAULT_PAGE_SIZE = 20
 
-class Controller {
+class Controller extends EE {
   /** @final */
   static get Model () {
     return ModelController
@@ -50,6 +51,8 @@ class Controller {
   }
 
   constructor (router) {
+    super()
+
     this.router = router || createRouter()
     this.routes = getControllerRoutes(this)
 
@@ -339,7 +342,8 @@ function inflateRoutes (controller, routes) {
 
     path.forEach(([httpMethods, endpointUri]) => {
       httpMethods.forEach((httpMethod, index) => {
-        const endpointRoute = {name: endpointName, method: httpMethod, path: endpointUri}
+        const endpointFullName = controller.constructor.name.concat('_', index ? httpMethod.toLowerCase().concat(_.upperFirst(name || endpointName)) : name || endpointName)
+        const endpointRoute = {name: endpointName, fullName: endpointFullName, method: httpMethod, path: endpointUri}
         let endpoint
         let mws
 
@@ -347,6 +351,8 @@ function inflateRoutes (controller, routes) {
           router,
           endpointUri,
           (req, res, next) => {
+            req.controller = controller
+
             if (isModelController) {
               req.model = controller.constructor.model
 
@@ -356,17 +362,27 @@ function inflateRoutes (controller, routes) {
             }
 
             mws.reverse().reduce((acc, mw) => {
-              const fn = acc
               return (err) => {
                 if (err) {
+                  controller.emit('req.error', req, res, endpointRoute)
+
                   return next(err)
                 }
-                mw(req, res, fn)
+
+                mw(req, res, acc)
               }
             }, next)()
           },
-          controller[endpointName].bind(controller),
-          controller.constructor.name.concat('_', index ? httpMethod.toLowerCase().concat(_.upperFirst(name || endpointName)) : name || endpointName)
+          (req, res) => {
+            controller.emit('req.received', req, res, endpointRoute)
+            controller.emit(`req.received.${endpointName}`, req, res, endpointRoute)
+
+            controller[endpointName].call(controller, req, res)
+
+            controller.emit('res.sent', req, res, endpointRoute)
+            controller.emit(`res.sent.${endpointName}`, req, res, endpointRoute)
+          },
+          endpointFullName
         )
 
         Object.keys(route).forEach((key) => {
