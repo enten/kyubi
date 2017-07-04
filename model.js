@@ -583,16 +583,14 @@ class Model {
   }
 
   static create (data, opts) {
-    if (typeof data === 'object') {
-      const docId = data._id || data._key || this.generateKey(data)
-      const docExists = docId && this.exists(docId)
+    const doc = new this(data)
+    const docId = doc._id || doc._key
 
-      if (docExists) {
-        throw new Error(`Document "${docId}" already exists (model: ${this.modelName})`)
-      }
+    if (this.exists(docId)) {
+      throw new Error(`Document "${docId}" already exists (model: ${this.modelName})`)
     }
 
-    return (new this(data))._save(opts)
+    return doc._save(opts)
   }
 
   static createMany (data, opts) {
