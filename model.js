@@ -11,6 +11,8 @@ const {
   printObject
 } = require('@arangodb')
 
+const Controller = require('./controller')
+
 const {
   EE,
   lazyProperty
@@ -94,6 +96,11 @@ const GLOBAL_EE = new EE()
 const GLOBAL_HOOKS = {}
 
 class Model {
+  /** @overridable */
+  static get Controller () {
+    return lazyProperty(this, '_Controller', getModelController)
+  }
+
   /** @final */
   static get Document () {
     return this
@@ -182,6 +189,11 @@ class Model {
   /** @overridable */
   static get computed () {
     return null
+  }
+
+  /** @final */
+  static get controller () {
+    throw new Error(`Model's controller "${this.name}" isn't bootstrapped yet (use static "bootstrapController(context)")`)
   }
 
   /** @overridable */
@@ -401,8 +413,27 @@ class Model {
 
   }
 
-  static bootstrap (db) {
-    return bootstrapModel(this, db)
+  static bootstrap (db, context, controllerOpts) {
+    bootstrapModel(this, db)
+
+    if (context) {
+      this.bootstrapController(context, controllerOpts)
+    }
+
+    return this
+  }
+
+  static bootstrapController (context, opts) {
+    const controller = this.Controller.bootstrap(context, opts)
+
+    Object.defineProperty(this, 'controller', {
+      configurable: false,
+      enumerable: false,
+      value: controller,
+      writable: false
+    })
+
+    return controller
   }
 
   static byExample () {
@@ -2781,6 +2812,25 @@ function getMetaTimestampAttributes (model) {
     Object.keys(model.partitionsModels)
       .map((key) => model.partitionsModels[key].partitionTimestamp || [])
   )
+}
+
+function getModelController (model) {
+  const controllerBaseUri = `/${model.documentsName}`
+  const controllerName = `${_.upperFirst(model.documentsName)}Controller`
+
+  return class extends Controller.Model {
+    static get baseUri () {
+      return controllerBaseUri
+    }
+
+    static get model () {
+      return model
+    }
+
+    static get name () {
+      return controllerName
+    }
+  }
 }
 
 function getModelIndexesKeys (model) {
