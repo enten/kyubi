@@ -268,11 +268,13 @@ function getControllerRoutes (controller) {
   })
 
   if (controller instanceof ModelController) {
+    const {model} = controller.constructor
+
     const {
       partitionsModels,
       relationsPlans,
       relationsKeys
-    } = controller.constructor.model
+    } = model
 
     let modelRoutes = {
       index: [['GET', '/']],
@@ -318,6 +320,23 @@ function getControllerRoutes (controller) {
           routes[endpointName] = modelRoute
         } else {
           routes[endpointName].path = modelRoute.path
+        }
+
+        if (!routes[endpointName].queryParam) {
+          routes[endpointName].queryParam = ['partition']
+        }
+
+        if (~['show'].indexOf(endpointName) && !routes[endpointName].response) {
+          routes[endpointName].response = [200, model.schema, 'json']
+        }
+
+        if (~['replace', 'store', 'update'].indexOf(endpointName) && !routes[endpointName].body) {
+          routes[endpointName].body = [
+            {
+              fromClient: model.fromClient.bind(model),
+              schema: model.schema
+            }
+          ]
         }
       }
     })
