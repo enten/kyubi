@@ -25,7 +25,17 @@ class Controller extends EE {
   }
 
   /** @overridable */
+  static get except () {
+    return null
+  }
+
+  /** @overridable */
   static get middlewares () {
+    return null
+  }
+
+  /** @overridable */
+  static get only () {
     return null
   }
 
@@ -35,8 +45,8 @@ class Controller extends EE {
   }
 
   /** @final */
-  static bootstrap (context) {
-    const controller = new this()
+  static bootstrap (context, opts) {
+    const controller = new this(opts)
 
     context.use(controller.router)
 
@@ -44,56 +54,63 @@ class Controller extends EE {
   }
 
   /** @final */
-  static router () {
-    const controller = new this()
+  static router (router, opts) {
+    const controller = new this(router, opts)
 
     return controller.router
   }
 
-  constructor (router) {
+  constructor (router, opts) {
+    if (_.isPlainObject(router)) {
+      opts = router
+      router = undefined
+    }
+
     super()
 
     this.router = router || createRouter()
-    this.routes = getControllerRoutes(this)
+    this.routes = getControllerRoutes(this, opts)
 
-    const {
-      partitionsModels,
-      relationsKeys
-    } = this.constructor.model
+    if (this.constructor.model) {
+      const {
+        partitionsModels,
+        relationsKeys
+      } = this.constructor.model
 
-    if (this.moveInto) {
-      Object.keys(partitionsModels).forEach((key) => {
-        const {partition, partitionMoveMethod} = partitionsModels[key]
+      if (this.moveInto) {
+        Object.keys(partitionsModels).forEach((key) => {
+          const {partition, partitionMoveMethod} = partitionsModels[key]
 
-        if (this.routes[partitionMoveMethod]) {
-          this[partitionMoveMethod] = (req, res) => {
-            req.pathParams.partition = partition
+          if (this.routes[partitionMoveMethod]) {
+            this[partitionMoveMethod] = (req, res) => {
+              req.pathParams.partition = partition
 
-            this.moveInto(req, res)
-          }
-        }
-      })
-    }
-
-    if (relationsKeys.length) {
-      relationsKeys.forEach((relName) => {
-        const upperFirstRelName = _.upperFirst(relName)
-
-        ;[
-          'showRelation',
-          'saveRelation',
-        ].forEach((endpoint) => {
-          const endpointName = endpoint + upperFirstRelName
-
-          if (this.routes[endpointName]) {
-            this[endpointName] = (req, res) => {
-              req.pathParams.relName = relName
-
-              this[endpoint].call(this, req, res)
+              this.moveInto(req, res)
             }
           }
         })
-      })
+      }
+
+      if (relationsKeys.length) {
+        relationsKeys.forEach((relName) => {
+          const upperFirstRelName = _.upperFirst(relName)
+
+          ;[
+            'showRelation',
+            'saveRelation',
+          ].forEach((endpoint) => {
+            const endpointName = endpoint + upperFirstRelName
+
+            if (this.routes[endpointName]) {
+              this[endpointName] = (req, res) => {
+                req.pathParams.relName = relName
+
+                this[endpoint].call(this, req, res)
+              }
+            }
+          })
+        })
+      }
     }
 
     inflateRoutes(this, this.routes)
@@ -109,16 +126,6 @@ class ModelController extends Controller {
   /** @overridable required */
   static get model () {
     throw new Error(`ModelController "${this.name}" must override static get model`)
-  }
-
-  /** @overridable */
-  static get except () {
-    return null
-  }
-
-  /** @overridable */
-  static get only () {
-    return null
   }
 
   create (req, res) {
@@ -235,9 +242,17 @@ class ModelController extends Controller {
   }
 }
 
-function getControllerRoutes (controller) {
+function getControllerRoutes (controller, opts = {}) {
   let {baseUri, except, only} = controller.constructor
   let routes = Object.assign({}, controller.constructor.routes)
+
+  if (opts.except) {
+    except = [].concat(except || [], opts.except)
+  }
+
+  if (opts.only) {
+    only = [].concat(only || [], opts.only)
+  }
 
   if (except) {
     except = _.castArray(except)
@@ -283,12 +298,7 @@ function getControllerRoutes (controller) {
       Object.keys(partitionsModels).forEach((key) => {
         const {partitionMoveMethod} = partitionsModels[key]
 
-        if (
-          (!except || except.indexOf(partitionMoveMethod) === -1) &&
-          (!only || only.indexOf(partitionMoveMethod) !== -1)
-        ) {
-          modelRoutes[partitionMoveMethod] = [['GET', `/:_key/${partitionMoveMethod}`]]
-        }
+        modelRoutes[partitionMoveMethod] = [['GET', `/:_key/${partitionMoveMethod}`]]
       })
     }
 
@@ -302,30 +312,33 @@ function getControllerRoutes (controller) {
         ].forEach(([method, endpoint]) => {
           const endpointName = endpoint + upperFirstRelName
 
-          if (
-          (!except || except.indexOf(endpointName) === -1) &&
-          (!only || only.indexOf(endpointName) !== -1)
-        ) {
-            modelRoutes[endpointName] = [[method, `/:_key/${relName}`]]
-          }
+          modelRoutes[endpointName] = [[method, `/:_key/${relName}`]]
         })
       })
     }
 
     Object.keys(modelRoutes).forEach((endpointName) => {
-      if (!routes[endpointName] || !routes[endpointName].path) {
+      if ((!routes[endpointName] || !routes[endpointName].path)) {
         const modelRoute = parseEndpointRoute(modelRoutes[endpointName], baseUri)
 
-         if (!routes[endpointName]) {
-           routes[endpointName] = modelRoute
-         } else {
-            routes[endpointName].path = modelRoute.path
-         }
+        if (!routes[endpointName]) {
+          routes[endpointName] = modelRoute
+        } else {
+          routes[endpointName].path = modelRoute.path
+        }
       }
     })
   }
 
-  return routes
+  return !except && !only ? routes : Object.keys(routes)
+    .filter((endpointName) => (
+      (!except || except.indexOf(endpointName) === -1) &&
+      (!only || only.indexOf(endpointName) !== -1)
+    ))
+    .reduce((acc, endpointName) => {
+      acc[endpointName] = routes[endpointName]
+      return acc
+    }, {})
 }
 
 function inflateRoutes (controller, routes) {
