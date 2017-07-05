@@ -1,3 +1,3 @@
-# am: ArangoDB Model
+# kyubi
 
-Model for ArangoDB
+Model and Controller for ArangoDB

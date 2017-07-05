@@ -1,25 +1,27 @@
 {
-  "name": "am",
-  "version": "0.0.1",
-  "description": "Models for ArangoDB",
+  "name": "kyubi",
+  "version": "0.1.0",
+  "description": "Model and Controller for ArangoDB",
   "main": "index.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/enten/arangodb-orm.git"
+    "url": "git+https://github.com/enten/kyubi.git"
   },
   "keywords": [
     "arango",
     "arangodb",
+    "controller",
+    "dao",
     "model",
     "orm"
   ],
   "author": "Steven Enten <steven@enten.fr>",
   "license": "MIT",
   "bugs": {
-    "url": "https://github.com/enten/arangodb-orm/issues"
+    "url": "https://github.com/enten/kyubi/issues"
   },
-  "homepage": "https://github.com/enten/arangodb-orm#readme"
+  "homepage": "https://github.com/enten/kyubi#readme"
 }
