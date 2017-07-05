@@ -11,6 +11,11 @@ class Controller extends EE {
     return ModelController
   }
 
+  /** @final */
+  static get ModelController () {
+    return ModelController
+  }
+
   /** @overridable */
   static get baseUri () {
     let uri = this.name
@@ -66,10 +71,17 @@ class Controller extends EE {
       router = undefined
     }
 
+    if (!opts) {
+      opts = {}
+    }
+
     super()
 
+    this.baseUri = opts.baseUri || this.constructor.baseUri
+    this.except = [].concat( this.constructor.except || [], opts.except || [])
+    this.only = [].concat( this.constructor.only || [], opts.only || [])
     this.router = router || createRouter()
-    this.routes = getControllerRoutes(this, opts)
+    this.routes = getControllerRoutes(this)
 
     if (this.constructor.model) {
       const {
@@ -126,6 +138,11 @@ class ModelController extends Controller {
   /** @overridable required */
   static get model () {
     throw new Error(`ModelController "${this.name}" must override static get model`)
+  }
+
+/** @overridable */
+  static get routes () {
+    return null
   }
 
   create (req, res) {
@@ -242,25 +259,9 @@ class ModelController extends Controller {
   }
 }
 
-function getControllerRoutes (controller, opts = {}) {
-  let {baseUri, except, only} = controller.constructor
+function getControllerRoutes (controller) {
+  let {baseUri, except, only} = controller
   let routes = Object.assign({}, controller.constructor.routes)
-
-  if (opts.except) {
-    except = [].concat(except || [], opts.except)
-  }
-
-  if (opts.only) {
-    only = [].concat(only || [], opts.only)
-  }
-
-  if (except) {
-    except = _.castArray(except)
-  }
-
-  if (only) {
-    only = _.castArray(only)
-  }
 
   Object.keys(routes).forEach((endpointName) => {
     routes[endpointName] = parseEndpointRoute(routes[endpointName], baseUri)
@@ -284,14 +285,6 @@ function getControllerRoutes (controller, opts = {}) {
       delete: [['DELETE', '/:_key']],
       moveInto: [['GET', '/:_key/move/:partition']],
       query: [[['GET', 'POST'], '/query']]
-    }
-
-    if (except) {
-      modelRoutes = _.omit(modelRoutes, except)
-    }
-
-    if (only) {
-      modelRoutes = _.pick(modelRoutes, only)
     }
 
     if (modelRoutes.moveInto) {
@@ -332,8 +325,8 @@ function getControllerRoutes (controller, opts = {}) {
 
   return !except && !only ? routes : Object.keys(routes)
     .filter((endpointName) => (
-      (!except || except.indexOf(endpointName) === -1) &&
-      (!only || only.indexOf(endpointName) !== -1)
+      (!except.length || except.indexOf(endpointName) === -1) &&
+      (!only.length || only.indexOf(endpointName) !== -1)
     ))
     .reduce((acc, endpointName) => {
       acc[endpointName] = routes[endpointName]
