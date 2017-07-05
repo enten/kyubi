@@ -11,8 +11,6 @@ const {
   printObject
 } = require('@arangodb')
 
-const Controller = require('./controller')
-
 const {
   EE,
   lazyProperty
@@ -2818,7 +2816,7 @@ function getModelController (model) {
   const controllerBaseUri = `/${model.documentsName}`
   const controllerName = `${_.upperFirst(model.documentsName)}Controller`
 
-  return class extends Controller.Model {
+  return class extends require('./controller').Model {
     static get baseUri () {
       return controllerBaseUri
     }
