@@ -241,7 +241,7 @@ class ModelController extends Controller {
   store (req, res) {
     const data = req.json()
     const opts = req.queryParams
-    const result = req.model.save(data, opts)
+    const result = req.model.create(data, opts)
 
     res.send(result)
   }
