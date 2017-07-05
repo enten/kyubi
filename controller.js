@@ -95,7 +95,7 @@ class Controller extends EE {
 
           if (this.routes[partitionMoveMethod]) {
             this[partitionMoveMethod] = (req, res) => {
-              req.pathParams.partition = partition
+              req.pathParams.partitionName = partition
 
               this.moveInto(req, res)
             }
@@ -183,7 +183,7 @@ class ModelController extends Controller {
 
   moveInto (req, res) {
     const _key = req.param('_key')
-    const partition = req.param('partition')
+    const partition = req.param('partitionName')
     const opts = req.queryParams
     const result = req.model.moveInto(partition, _key, opts)
     
@@ -283,7 +283,7 @@ function getControllerRoutes (controller) {
       replace: [['PUT', '/:_key']],
       update: [['PATCH', '/:_key']],
       delete: [['DELETE', '/:_key']],
-      moveInto: [['GET', '/:_key/move/:partition']],
+      moveInto: [['GET', '/:_key/move/:partitionName']],
       query: [[['GET', 'POST'], '/query']]
     }
 
