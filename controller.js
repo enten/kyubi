@@ -168,8 +168,8 @@ class ModelController extends Controller {
     delete opts.page
     delete opts.pageSize
 
-    page = page || 1
-    pageSize = pageSize || req.model.pageSize || DEFAULT_PAGE_SIZE
+    page = page ? Number(page) : 1
+    pageSize = pageSize ? Number(pageSize) : req.model.pageSize || DEFAULT_PAGE_SIZE
 
     const result = req.model.paginate(page, pageSize, opts)
 
