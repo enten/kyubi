@@ -444,7 +444,7 @@ class Model {
       return selector.map((x) => this.castDocumentSelector(x))
     }
 
-    if (typeof selector === 'object' && typeof selector._key === 'number') {
+    if (selector && typeof selector === 'object' && typeof selector._key === 'number') {
       selector._key = String(selector._key)
     }
 
@@ -650,7 +650,7 @@ class Model {
       return selector.map((x) => this.exists(x))
     }
 
-    if (typeof selector === 'object' && !selector._id && !selector._key) {
+    if (!selector || (typeof selector === 'object' && !selector._id && !selector._key)) {
       return false
     }
 
