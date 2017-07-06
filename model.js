@@ -661,7 +661,7 @@ class Model {
       delete selector._id
     }
 
-    return this.collection.exists(selector)
+    return !!selector ? this.collection.exists(selector._key ? String(selector._key) : selector._id || selector) : null
   }
 
   static existsByExample () {
