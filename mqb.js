@@ -1192,8 +1192,11 @@ function inflateQuery (api) {
             qb = inheritQbOptions(qb)
               .for(docRef)
               .in(AQB.expr(`${direction} ${prevDocRef}._id ${pivot.collectionName}`))
-              .first(unary)
               .distinct(!index && rel.plans.length && nextPlan)
+
+            if (unary || qb.opts.first || qb.opts.last) {
+              qb = qb[qb.opts.last ? 'last' : 'first'].call(qb, true)
+            }
 
             if (!nextPlan/* && qbEdge*/) {
               qb = qb.for([docRef, docRefEdge])
@@ -1272,7 +1275,7 @@ function inflateQuery (api) {
           }
         }
 
-        if (rel.unary || (rel.plans.length > 1 && (relQb.opts.pair || relQb.opts.count))) {
+        if (rel.unary || relQb.opts.first || relQb.opts.last || (rel.plans.length > 1 && (relQb.opts.pair || relQb.opts.count))) {
           relAqb = AQB.expr(`FIRST(${relAqb.toAQL()})`)
         }
 
