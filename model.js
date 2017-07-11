@@ -661,6 +661,10 @@ class Model {
       delete selector._id
     }
 
+    if (typeof selector === 'string' && ~selector.indexOf('/')) {
+      selector = selector.split('/')[0]
+    }
+
     return !!selector ? this.collection.exists(selector._key ? String(selector._key) : selector._id || selector) : null
   }
 
@@ -2005,6 +2009,16 @@ class Model {
     return this.update(doc, opts)
   }
 
+  static use (modelName, partition) {
+    let model = this.db._models(modelName)
+
+    if (model && partition) {
+      model = model[partition]
+    }
+
+    return model
+  }
+
   static _PRINT (context) {
     context.output += `[Model "${this.modelName}" (${this.bootstrapped ? ['collection:', this.collectionName].join(' ') : 'not bootstrapped'})]`
   }
@@ -2078,6 +2092,10 @@ class Model {
 
   _save (opts) {
     return this.constructor.insertOrUpdate(this, opts)
+  }
+
+  _use (...args) {
+    return this.constructor.use.apply(this.constructor, args)
   }
 
   // toAQL (opts) {
@@ -2867,7 +2885,6 @@ function getModelPartitionsPlans (model) {
   }
 
   if (model.partitionTrashed) {
-    model.partitionTrashed
     partitionsPlans[model.partitionTrashed] = {
       moveMethod: 'softRemove',
       timestampKey: model.deleteTimestamp
